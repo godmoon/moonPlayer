@@ -1,7 +1,8 @@
 // 历史记录组件
 import { useState, useEffect, useCallback } from 'react';
-import { getRecentPlaylists, deletePlaylistHistory, refreshPlaylist } from '../stores/api';
+import { getRecentPlaylists, deletePlaylistHistory, refreshPlaylist, recordHistory } from '../stores/api';
 import { usePlayerStore } from '../stores/playerStore';
+import { setPendingSeekPosition } from './AudioPlayer';
 import type { Track, Playlist } from '../stores/playerStore';
 
 interface HistoryItem {
@@ -20,7 +21,7 @@ export function HistoryView() {
   const [loading, setLoading] = useState(true);
   const [deleteConfirm, setDeleteConfirm] = useState<HistoryItem | null>(null);
 
-  const { setCurrentPlaylist, setCurrentTrack, setIsPlaying, setPendingSeekPosition, currentPlaylist } = usePlayerStore();
+  const { setCurrentPlaylist, setCurrentTrack, setIsPlaying, currentPlaylist } = usePlayerStore();
 
   const loadHistory = useCallback(async () => {
     setLoading(true);
@@ -52,6 +53,24 @@ export function HistoryView() {
 
   const handleContinuePlay = async (item: HistoryItem) => {
     try {
+      // 在切换播放列表之前，先记录当前播放列表的位置
+      // 这样下次点击历史记录时能恢复到正确位置
+      const currentPlayer = usePlayerStore.getState();
+      if (currentPlayer.currentPlaylist && currentPlayer.currentTrack) {
+        const audio = document.querySelector('audio');
+        if (audio) {
+          const position = audio.currentTime || 0;
+          // 记录当前播放列表的位置
+          await recordHistory(currentPlayer.currentPlaylist.id, currentPlayer.currentTrack.id, position);
+        }
+      }
+
+      // 先设置待恢复的播放位置（在设置音轨之前）
+      if (item.position > 0) {
+        setPendingSeekPosition(item.position, item.track_id);
+        console.log('[HistoryView] 设置待恢复位置:', item.position, 'trackId:', item.track_id);
+      }
+
       // 刷新播放列表获取音轨
       const refreshed = await refreshPlaylist(item.playlist_id);
       const trackList = refreshed.tracks as Track[];
@@ -76,17 +95,12 @@ export function HistoryView() {
         lastTrack = trackList[0];
       }
 
-      // 先设置音轨
       setCurrentTrack(lastTrack);
-      // 然后设置待恢复的播放位置（AudioPlayer 会在音频加载后自动跳转）
-      // 必须在 setCurrentTrack 之后设置，否则会被重置
-      if (item.position > 0) {
-        // 使用 setTimeout 确保在状态更新后设置
-        setTimeout(() => {
-          setPendingSeekPosition(item.position);
-        }, 0);
-      }
       setIsPlaying(true);
+      
+      // 切换完成后重新加载历史（更新当前位置显示）
+      // 延迟一下确保后端已经更新
+      setTimeout(() => loadHistory(), 500);
     } catch (err) {
       console.error('继续播放失败:', err);
     }

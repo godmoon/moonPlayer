@@ -16,10 +16,16 @@ const TRANSCODE_FORMAT = '.mp3';
 // 转码缓存目录
 const TRANSCODE_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'transcode_cache');
 
+// WebDAV 文件缓存目录
+const WEBDAV_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'webdav_cache');
+
 // 确保缓存目录存在
 function ensureCacheDir() {
   if (!fs.existsSync(TRANSCODE_CACHE_DIR)) {
     fs.mkdirSync(TRANSCODE_CACHE_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(WEBDAV_CACHE_DIR)) {
+    fs.mkdirSync(WEBDAV_CACHE_DIR, { recursive: true });
   }
 }
 
@@ -27,6 +33,13 @@ function ensureCacheDir() {
 function getCachePath(filePath: string): string {
   const hash = crypto.createHash('md5').update(filePath).digest('hex');
   return path.join(TRANSCODE_CACHE_DIR, `${hash}.mp3`);
+}
+
+// 获取 WebDAV 缓存文件路径
+function getWebdavCachePath(configId: number, filePath: string): string {
+  const hash = crypto.createHash('md5').update(`${configId}:${filePath}`).digest('hex');
+  const ext = path.extname(filePath);
+  return path.join(WEBDAV_CACHE_DIR, `${hash}${ext}`);
 }
 
 export async function streamRoutes(app: FastifyInstance) {
@@ -44,7 +57,12 @@ export async function streamRoutes(app: FastifyInstance) {
 
     const filePath = (track as any).path;
 
-    // 检查文件是否存在
+    // 检查是否是 WebDAV 文件
+    if (filePath.startsWith('webdav://')) {
+      return await handleWebdavStream(req, reply, filePath);
+    }
+
+    // 检查本地文件是否存在
     try {
       fs.accessSync(filePath, fs.constants.R_OK);
     } catch {
@@ -503,4 +521,112 @@ async function getWebdavDurationViaDownload(configId: number, filePath: string):
       resolve(null);
     }
   });
+}
+
+// 处理 WebDAV 文件流（支持 Range 请求）
+async function handleWebdavStream(req: any, reply: any, filePath: string) {
+  // 解析 webdav://configId/path 格式
+  const match = filePath.match(/^webdav:\/\/(\d+)(.+)$/);
+  if (!match) {
+    return reply.code(400).send({ error: '无效的 WebDAV 路径格式' });
+  }
+  
+  const configId = parseInt(match[1], 10);
+  const webdavPath = match[2];
+  
+  const db = getDatabase();
+  const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as any;
+  if (!config) {
+    return reply.code(404).send({ error: 'WebDAV 配置不存在' });
+  }
+  
+  try {
+    const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
+    
+    // 确保缓存目录存在
+    ensureCacheDir();
+    const cachePath = getWebdavCachePath(configId, webdavPath);
+    
+    // 获取远程文件信息
+    const stat = await client.stat(webdavPath) as any;
+    const remoteSize = stat?.size || 0;
+    
+    // 检查缓存是否存在且有效
+    let useCache = false;
+    if (fs.existsSync(cachePath)) {
+      try {
+        const cacheStat = fs.statSync(cachePath);
+        if (cacheStat.size === remoteSize) {
+          useCache = true;
+        }
+      } catch {}
+    }
+    
+    // 如果没有有效缓存，下载文件
+    if (!useCache) {
+      const buffer = await client.getFileContents(webdavPath, { format: 'buffer' }) as Buffer;
+      fs.writeFileSync(cachePath, buffer);
+    }
+    
+    // 检查是否需要转码（浏览器不支持的格式）
+    const ext = path.extname(webdavPath).toLowerCase();
+    const needsTranscodeFile = NEEDS_TRANSCODE.includes(ext);
+    
+    let finalCachePath = cachePath;
+    let mimeType = getMimeType(webdavPath);
+    
+    if (needsTranscodeFile) {
+      // 需要转码
+      const transcodeCachePath = path.join(TRANSCODE_CACHE_DIR, 
+        crypto.createHash('md5').update(`webdav:${configId}:${webdavPath}`).digest('hex') + '.mp3');
+      
+      let useTranscodeCache = false;
+      if (fs.existsSync(transcodeCachePath)) {
+        try {
+          const sourceStat = fs.statSync(cachePath);
+          const transcodeStat = fs.statSync(transcodeCachePath);
+          if (transcodeStat.mtime > sourceStat.mtime) {
+            useTranscodeCache = true;
+          }
+        } catch {}
+      }
+      
+      if (!useTranscodeCache) {
+        await transcodeToFile(cachePath, transcodeCachePath);
+      }
+      
+      finalCachePath = transcodeCachePath;
+      mimeType = 'audio/mpeg';
+    }
+    
+    // 现在从缓存文件流式传输（支持完整 Range）
+    const fileStat = fs.statSync(finalCachePath);
+    const fileSize = fileStat.size;
+    
+    reply.header('Content-Type', mimeType);
+    reply.header('Accept-Ranges', 'bytes');
+    
+    // 处理 Range 请求
+    const range = req.headers.range;
+    
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+
+      reply.code(206);
+      reply.header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      reply.header('Content-Length', chunkSize);
+
+      const stream = fs.createReadStream(finalCachePath, { start, end });
+      return reply.send(stream);
+    }
+    
+    // 非 Range 请求，发送整个文件
+    reply.header('Content-Length', fileSize);
+    return reply.send(fs.createReadStream(finalCachePath));
+  } catch (err) {
+    return reply.code(500).send({ error: `获取 WebDAV 文件失败: ${(err as Error).message}` });
+  }
 }

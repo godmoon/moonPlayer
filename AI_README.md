@@ -178,19 +178,33 @@ pm2 logs moonplayer-server
 
 ## 最近更新
 
-### 2026-04-14: 历史记录恢复播放位置
+### 2026-04-14: WebDAV 文件播放支持进度条拖动
 
-- **问题**: 从历史记录选择播放列表时，只恢复了文件，没有恢复到上次播放的时间位置
-- **原因**: 
-  - 原实现使用 `setTimeout` 延迟设置播放位置，不可靠
-  - 只在暂停/结束时记录位置，播放过程中不记录
+- **问题**: WebDAV 路径下播放的文件不支持拖动进度条
+- **原因**: WebDAV stream 接口直接返回流，没有处理 HTTP Range 请求
 - **解决方案**:
-  - `playerStore.ts` 新增 `pendingSeekPosition` 状态和 `setPendingSeekPosition`/`clearPendingSeekPosition` 方法
-  - `HistoryView.tsx` 在设置音轨后用 `setTimeout` 设置 `pendingSeekPosition`（确保状态更新顺序）
-  - `AudioPlayer.tsx` 在 `onLoadedMetadata` 事件中从 store 获取最新 `pendingSeekPosition` 并跳转
-  - 新增定期记录播放位置（每5秒）
-  - 新增离开页面时通过 `sendBeacon` 记录位置
-  - 播放位置恢复优先级高于片头跳过
+  - 首次播放时将 WebDAV 文件下载到本地缓存 `~/.moonplayer/webdav_cache/`
+  - 后续播放直接流式传输缓存文件，支持完整 Range 请求
+  - 缓存文件以 `configId:filePath` 的 MD5 命名
+  - 修改 `server/src/routes/webdav.ts` 的 `/api/webdav/:id/stream` 接口
+  - 修改 `server/src/routes/stream.ts` 新增 `handleWebdavStream` 函数
+  - `/api/stream/:id` 接口现在也能正确处理 `webdav://` 开头的路径
+  - WebDAV 文件也支持转码（FLAC/WMA/APE 等格式转 MP3）
+
+### 2026-04-14: 历史记录恢复播放位置（修复）
+
+- **问题**: 从历史记录选择播放列表时，切换播放列表后播放位置恢复不稳定，大部分情况从头播放
+- **原因**: 
+  - 使用 `useRef` 存储 pendingSeekPosition，React 组件重渲染时可能出问题
+  - `react-h5-audio-player` 的 `onLoadedMetaData` 事件触发时机不确定
+  - 切换音轨时全局状态可能被其他事件覆盖
+- **解决方案**:
+  - 使用模块级变量 `globalPendingSeekPosition` 存储待恢复位置，不依赖 React ref
+  - 导出 `setPendingSeekPosition()` 函数供 HistoryView 直接调用
+  - 同时保存 `globalPendingSeekTrackId` 用于调试（实际逻辑中跳过检查）
+  - 新增 `onCanPlay` 事件作为备用恢复时机
+  - `handleLoadedMetadata` 和 `handleCanPlay` 都调用 `consumePendingSeekPosition(0)` 跳过 trackId 检查
+  - 异步获取时长时也尝试恢复位置
 
 ### 2026-04-14: 导航栏拖拽排序
 

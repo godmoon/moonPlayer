@@ -3,6 +3,27 @@ import type { FastifyInstance } from 'fastify';
 import { createClient } from 'webdav';
 import type { WebDAVClient } from 'webdav';
 import { getDatabase } from '../db/schema.js';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import crypto from 'crypto';
+
+// WebDAV 文件缓存目录
+const WEBDAV_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'webdav_cache');
+
+// 确保缓存目录存在
+function ensureCacheDir() {
+  if (!fs.existsSync(WEBDAV_CACHE_DIR)) {
+    fs.mkdirSync(WEBDAV_CACHE_DIR, { recursive: true });
+  }
+}
+
+// 获取缓存文件路径
+function getCachePath(configId: number, filePath: string): string {
+  const hash = crypto.createHash('md5').update(`${configId}:${filePath}`).digest('hex');
+  const ext = path.extname(filePath);
+  return path.join(WEBDAV_CACHE_DIR, `${hash}${ext}`);
+}
 
 // WebDAV 客户端缓存
 const webdavClients = new Map<string, WebDAVClient>();
@@ -176,7 +197,7 @@ export async function webdavRoutes(app: FastifyInstance) {
     }
   });
 
-  // 获取 WebDAV 文件流（代理下载）
+  // 获取 WebDAV 文件流（代理下载，支持 Range 请求）
   app.get('/api/webdav/:id/stream', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath } = req.query as { path?: string };
@@ -193,8 +214,37 @@ export async function webdavRoutes(app: FastifyInstance) {
     try {
       const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
       
-      // 获取文件内容流
-      const stream = await client.createReadStream(filePath);
+      // 确保缓存目录存在
+      ensureCacheDir();
+      const cachePath = getCachePath(Number(id), filePath);
+      
+      // 获取远程文件信息
+      const stat = await client.stat(filePath) as any;
+      const remoteSize = stat?.size || 0;
+      const remoteLastMod = stat?.lastmod ? new Date(stat.lastmod).getTime() : Date.now();
+      
+      // 检查缓存是否存在且有效
+      let useCache = false;
+      if (fs.existsSync(cachePath)) {
+        try {
+          const cacheStat = fs.statSync(cachePath);
+          // 缓存大小匹配且比远程文件旧（远程已更新）或大小匹配
+          if (cacheStat.size === remoteSize) {
+            useCache = true;
+          }
+        } catch {}
+      }
+      
+      // 如果没有有效缓存，下载文件
+      if (!useCache) {
+        const arrayBuffer = await client.getFileContents(filePath) as ArrayBuffer;
+        const buffer = Buffer.from(arrayBuffer);
+        fs.writeFileSync(cachePath, buffer);
+      }
+      
+      // 现在从缓存文件流式传输（支持完整 Range）
+      const fileStat = fs.statSync(cachePath);
+      const fileSize = fileStat.size;
       
       // 设置 Content-Type
       const ext = filePath.split('.').pop()?.toLowerCase();
@@ -212,7 +262,26 @@ export async function webdavRoutes(app: FastifyInstance) {
       reply.header('Content-Type', mimeTypes[ext || ''] || 'audio/mpeg');
       reply.header('Accept-Ranges', 'bytes');
       
-      return reply.send(stream);
+      // 处理 Range 请求
+      const range = req.headers.range;
+      
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunkSize = end - start + 1;
+
+        reply.code(206);
+        reply.header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        reply.header('Content-Length', chunkSize);
+
+        const stream = fs.createReadStream(cachePath, { start, end });
+        return reply.send(stream);
+      }
+      
+      // 非 Range 请求，发送整个文件
+      reply.header('Content-Length', fileSize);
+      return reply.send(fs.createReadStream(cachePath));
     } catch (err) {
       return reply.code(500).send({ error: `获取文件失败: ${(err as Error).message}` });
     }
