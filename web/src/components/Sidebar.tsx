@@ -1,7 +1,7 @@
 // 侧边栏组件
 import { useState } from 'react';
 
-type Tab = 'browse' | 'playlists' | 'history' | 'ratings' | 'settings';
+type Tab = 'browse' | 'playlists' | 'current' | 'history' | 'ratings' | 'settings';
 
 export function Sidebar({ activeTab, onTabChange }: {
   activeTab: Tab;
@@ -12,6 +12,7 @@ export function Sidebar({ activeTab, onTabChange }: {
   const tabs: { id: Tab; icon: string; label: string }[] = [
     { id: 'browse', icon: '📁', label: '浏览' },
     { id: 'playlists', icon: '📋', label: '播放列表' },
+    { id: 'current', icon: '▶️', label: '当前列表' },
     { id: 'history', icon: '🕐', label: '历史' },
     { id: 'ratings', icon: '⭐', label: '评分管理' },
     { id: 'settings', icon: '⚙️', label: '设置' }

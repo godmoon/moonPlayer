@@ -7,10 +7,49 @@ import { Settings } from './components/Settings';
 import { PlayerBar } from './components/AudioPlayer';
 import { RatingManager } from './components/RatingManager';
 import { HistoryView } from './components/HistoryView';
+import { CurrentPlaylist } from './components/CurrentPlaylist';
+import { Login } from './components/Login';
+import { Setup } from './components/Setup';
+
+type AuthState = 'checking' | 'needSetup' | 'needLogin' | 'authenticated';
 
 function App() {
+  const [authState, setAuthState] = useState<AuthState>('checking');
   const [activeTab, setActiveTab] = useState<Tab>('browse');
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
+
+  // 检查登录状态
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    try {
+      // 先检查是否需要初始化
+      const statusRes = await fetch('/api/auth/status');
+      const statusData = await statusRes.json();
+
+      if (statusData.needSetup) {
+        setAuthState('needSetup');
+        return;
+      }
+
+      // 检查登录状态
+      const checkRes = await fetch('/api/auth/check', {
+        credentials: 'include'
+      });
+      const checkData = await checkRes.json();
+
+      if (checkData.authenticated) {
+        setAuthState('authenticated');
+      } else {
+        setAuthState('needLogin');
+      }
+    } catch (err) {
+      console.error('检查登录状态失败:', err);
+      setAuthState('needLogin');
+    }
+  };
 
   // 监听侧边栏重置事件，回到列表首页
   useEffect(() => {
@@ -32,6 +71,26 @@ function App() {
     setActiveTab('playlists');
   };
 
+  // 检查中
+  if (authState === 'checking') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-950">
+        <div className="text-white">加载中...</div>
+      </div>
+    );
+  }
+
+  // 需要初始化
+  if (authState === 'needSetup') {
+    return <Setup onSuccess={() => setAuthState('authenticated')} />;
+  }
+
+  // 需要登录
+  if (authState === 'needLogin') {
+    return <Login onSuccess={() => setAuthState('authenticated')} />;
+  }
+
+  // 已登录
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-white">
       {/* 主内容区 */}
@@ -55,6 +114,8 @@ function App() {
               <PlaylistManager onSelectPlaylist={handleSelectPlaylist} />
             )
           )}
+
+          {activeTab === 'current' && <CurrentPlaylist />}
 
           {activeTab === 'history' && <HistoryView />}
 

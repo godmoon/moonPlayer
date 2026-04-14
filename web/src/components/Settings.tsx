@@ -30,6 +30,16 @@ export function Settings() {
     base_path: '/'
   });
 
+  // 密码修改
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    oldPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  });
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
+
   useEffect(() => {
     loadMusicPaths();
     loadWebdavConfigs();
@@ -124,6 +134,61 @@ export function Settings() {
     if (!confirm('确定删除此 WebDAV 配置？')) return;
     await deleteWebdavConfig(id);
     await loadWebdavConfigs();
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError('');
+    setPasswordSuccess('');
+
+    if (!passwordForm.oldPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      setPasswordError('所有字段都不能为空');
+      return;
+    }
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('新密码两次输入不一致');
+      return;
+    }
+
+    if (passwordForm.newPassword.length < 6) {
+      setPasswordError('新密码至少需要6个字符');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(passwordForm),
+        credentials: 'include'
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setPasswordError(data.error || '修改失败');
+        return;
+      }
+
+      setPasswordSuccess('密码修改成功');
+      setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' });
+      setTimeout(() => {
+        setShowPasswordForm(false);
+        setPasswordSuccess('');
+      }, 2000);
+    } catch (err) {
+      setPasswordError('网络错误，请重试');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!confirm('确定要退出登录吗？')) return;
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    window.location.reload();
   };
 
   return (
@@ -283,6 +348,75 @@ export function Settings() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* 账户安全 */}
+      <div className="mb-6">
+        <label className="block text-sm text-gray-400 mb-2">账户安全</label>
+        {showPasswordForm ? (
+          <div className="bg-gray-700 p-3 rounded space-y-2">
+            <input
+              type="password"
+              value={passwordForm.oldPassword}
+              onChange={(e) => setPasswordForm({ ...passwordForm, oldPassword: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-600 rounded text-sm"
+              placeholder="原密码"
+              disabled={saving}
+            />
+            <input
+              type="password"
+              value={passwordForm.newPassword}
+              onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-600 rounded text-sm"
+              placeholder="新密码（至少6个字符）"
+              disabled={saving}
+            />
+            <input
+              type="password"
+              value={passwordForm.confirmPassword}
+              onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-600 rounded text-sm"
+              placeholder="确认新密码"
+              disabled={saving}
+            />
+            {passwordError && <p className="text-red-400 text-sm">{passwordError}</p>}
+            {passwordSuccess && <p className="text-green-400 text-sm">{passwordSuccess}</p>}
+            <div className="flex gap-2">
+              <button
+                onClick={handleChangePassword}
+                disabled={saving}
+                className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded text-sm"
+              >
+                {saving ? '保存中...' : '确认修改'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowPasswordForm(false);
+                  setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' });
+                  setPasswordError('');
+                }}
+                className="px-3 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <button
+              onClick={() => setShowPasswordForm(true)}
+              className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-left"
+            >
+              🔐 修改密码
+            </button>
+            <button
+              onClick={handleLogout}
+              className="w-full px-4 py-2 bg-gray-700 hover:bg-red-600 rounded text-sm text-left"
+            >
+              🚪 退出登录
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 关于 */}
