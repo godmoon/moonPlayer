@@ -264,6 +264,10 @@ curl http://localhost:3000/api/health
 curl -X POST http://localhost:3000/api/music-paths \
   -H "Content-Type: application/json" \
   -d '{"paths": ["/path/to/music"]}'
+
+# 8. 重启服务
+pm2 restart moonplayer-server
+
 ```
 
 ## 故障排查

@@ -178,6 +178,16 @@ pm2 logs moonplayer-server
 
 ## 最近更新
 
+### 2026-04-15: 修复切歌后不自动播放
+
+- **问题**: 一曲播放完成后切换到下一曲，不会自动播放
+- **原因**: 
+  - `handleEnded` 调用 `playNext()` 后没有确保 `isPlaying` 状态为 true
+  - 播放状态同步 effect 只监听 `isPlaying` 和 `streamUrl`，但切歌时 `isPlaying` 没变
+- **解决**: 
+  - `handleEnded` 在调用 `playNext()` 前先调用 `setIsPlaying(true)`
+  - 播放状态同步 effect 增加监听 `currentTrack?.id`，切歌时也检查播放状态
+
 ### 2026-04-14: WebDAV 文件播放支持进度条拖动
 
 - **问题**: WebDAV 路径下播放的文件不支持拖动进度条

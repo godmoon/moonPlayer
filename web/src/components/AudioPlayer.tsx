@@ -90,7 +90,7 @@ export function PlayerBar() {
       getStreamUrl(currentTrack.id)) 
     : null;
 
-  // 播放状态同步
+  // 播放状态同步（当 streamUrl 变化时也需要检查，因为切歌后音频元素会重置为 paused）
   useEffect(() => {
     if (!playerRef.current?.audio?.current || !streamUrl) return;
 
@@ -100,7 +100,7 @@ export function PlayerBar() {
     } else if (!isPlaying && !audio.paused) {
       audio.pause();
     }
-  }, [isPlaying, streamUrl]);
+  }, [isPlaying, streamUrl, currentTrack?.id]);
 
   // 定期记录播放位置（每5秒）
   useEffect(() => {
@@ -173,8 +173,10 @@ export function PlayerBar() {
         await recordHistory(currentPlaylist.id, currentTrack.id, 0).catch(() => {});
       }
     }
+    // 切歌后继续播放
+    setIsPlaying(true);
     playNext();
-  }, [currentTrack, currentPlaylist, playNext, updateRating]);
+  }, [currentTrack, currentPlaylist, playNext, updateRating, setIsPlaying]);
 
   const handleLoadedMetadata = useCallback((e: any) => {
     const audio = e.currentTarget;
