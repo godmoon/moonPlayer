@@ -40,6 +40,9 @@ interface PlayerState {
   duration: number;
   volume: number;
 
+  // 待恢复的播放位置（从历史记录恢复时使用）
+  pendingSeekPosition: number | null;
+
   // 播放模式
   playMode: PlayMode;
 
@@ -55,6 +58,8 @@ interface PlayerState {
   setDuration: (duration: number) => void;
   setVolume: (volume: number) => void;
   setPlayMode: (mode: PlayMode) => void;
+  setPendingSeekPosition: (position: number | null) => void;
+  clearPendingSeekPosition: () => void;
 
   // 播放控制
   playNext: () => void;
@@ -73,6 +78,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   position: 0,
   duration: 0,
   volume: 80,
+  pendingSeekPosition: null,
   playMode: 'sequential',
   shuffleQueue: [],
   shuffleIndex: 0,
@@ -105,6 +111,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       set({ playMode: mode });
     }
   },
+
+  setPendingSeekPosition: (position) => set({ pendingSeekPosition: position }),
+  clearPendingSeekPosition: () => set({ pendingSeekPosition: null }),
 
   playNext: () => {
     const state = get();

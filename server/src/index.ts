@@ -14,6 +14,7 @@ import { historyRoutes } from './routes/history.js';
 import { skipRoutes } from './routes/skip.js';
 import { webdavRoutes } from './routes/webdav.js';
 import { authRoutes, PUBLIC_PATHS } from './routes/auth.js';
+import { settingsRoutes } from './routes/settings.js';
 import { closeDatabase, needsAdminSetup, validateSession, cleanExpiredSessions } from './db/schema.js';
 import fs from 'fs';
 
@@ -114,6 +115,7 @@ async function start() {
   await app.register(historyRoutes);
   await app.register(skipRoutes);
   await app.register(webdavRoutes);
+  await app.register(settingsRoutes);
 
   try {
     await app.register(staticPlugin, {

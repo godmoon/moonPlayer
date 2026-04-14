@@ -33,11 +33,13 @@ export function PlayerBar() {
     playNext,
     playPrevious,
     deleteAndPlayNext,
-    updateTrackRating: updateRating
+    updateTrackRating: updateRating,
+    clearPendingSeekPosition
   } = usePlayerStore();
 
   const playerRef = useRef<any>(null);
   const playStartedRef = useRef<number>(0);
+  const lastHistoryRecordRef = useRef<number>(0); // 上次记录历史的时间
   const [skipAmounts, setSkipAmounts] = useState({ forward: 5, backward: 5 });
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -73,14 +75,56 @@ export function PlayerBar() {
     }
   }, [isPlaying, streamUrl]);
 
+  // 定期记录播放位置（每5秒）
+  useEffect(() => {
+    if (!currentTrack || !currentPlaylist || !isPlaying) return;
+
+    const interval = setInterval(() => {
+      if (playerRef.current?.audio?.current) {
+        const position = playerRef.current.audio.current.currentTime;
+        const now = Date.now();
+        // 每5秒记录一次
+        if (now - lastHistoryRecordRef.current >= 5000) {
+          recordHistory(currentPlaylist.id, currentTrack.id, position).catch(() => {});
+          lastHistoryRecordRef.current = now;
+        }
+      }
+    }, 1000); // 每秒检查一次
+
+    return () => clearInterval(interval);
+  }, [currentTrack, currentPlaylist, isPlaying]);
+
+  // 离开页面时记录播放位置
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (currentTrack && currentPlaylist && playerRef.current?.audio?.current) {
+        const position = playerRef.current.audio.current.currentTime;
+        // 使用 sync 方式发送（虽然不可靠，但总比不发送好）
+        const data = JSON.stringify({
+          playlistId: currentPlaylist.id,
+          trackId: currentTrack.id,
+          position
+        });
+        // 尝试使用 sendBeacon
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/history', new Blob([data], { type: 'application/json' }));
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [currentTrack, currentPlaylist]);
+
   // 播放事件处理
   const handlePlay = useCallback(() => {
     setIsPlaying(true);
     playStartedRef.current = Date.now();
-    // 开始播放时记录历史（位置为 0）
+  // 开始播放时记录历史位置
     if (currentTrack && currentPlaylist && playerRef.current?.audio?.current) {
       const position = playerRef.current.audio.current.currentTime || 0;
       recordHistory(currentPlaylist.id, currentTrack.id, position).catch(() => {});
+      lastHistoryRecordRef.current = Date.now();
     }
   }, [setIsPlaying, currentTrack, currentPlaylist]);
 
@@ -108,7 +152,10 @@ export function PlayerBar() {
   const handleLoadedMetadata = useCallback((e: any) => {
     const audio = e.currentTarget;
     const duration = audio.duration;
-    
+
+    // 从 store 获取最新的 pendingSeekPosition（避免闭包问题）
+    const pendingPos = usePlayerStore.getState().pendingSeekPosition;
+
     // 如果 duration 是 Infinity 或 NaN（转码流可能出现），需要从服务器获取
     if (!isFinite(duration) || duration === 0) {
       // 异步获取时长
@@ -116,24 +163,41 @@ export function PlayerBar() {
         getDuration(currentTrack.id).then((d) => {
           if (d && isFinite(d)) {
             setDuration(d);
-            // 片头跳过
-            const skipIntro = usePlayerStore.getState().currentPlaylist?.skipIntro || 0;
-            if (skipIntro > 0 && audio.currentTime < skipIntro) {
-              audio.currentTime = skipIntro;
+            // 恢复播放位置（优先级高于片头跳过）
+            const latestPendingPos = usePlayerStore.getState().pendingSeekPosition;
+            if (latestPendingPos && latestPendingPos > 0) {
+              audio.currentTime = latestPendingPos;
+              clearPendingSeekPosition();
+            } else {
+              // 片头跳过
+              const skipIntro = usePlayerStore.getState().currentPlaylist?.skipIntro || 0;
+              if (skipIntro > 0 && audio.currentTime < skipIntro) {
+                audio.currentTime = skipIntro;
+              }
             }
           }
         }).catch(() => {});
       }
     } else {
       setDuration(duration);
-      
-      // 片头跳过（如果当前播放列表有设置）
-      const skipIntro = usePlayerStore.getState().currentPlaylist?.skipIntro || 0;
-      if (skipIntro > 0 && audio.currentTime < skipIntro) {
-        audio.currentTime = skipIntro;
+
+      // 恢复播放位置（如果有待恢复的位置，优先级高于片头跳过）
+      if (pendingPos && pendingPos > 0) {
+        // 确保不超过时长
+        const seekPos = Math.min(pendingPos, duration - 1);
+        if (seekPos > 0) {
+          audio.currentTime = seekPos;
+        }
+        clearPendingSeekPosition();
+      } else {
+        // 片头跳过（如果当前播放列表有设置）
+        const skipIntro = usePlayerStore.getState().currentPlaylist?.skipIntro || 0;
+        if (skipIntro > 0 && audio.currentTime < skipIntro) {
+          audio.currentTime = skipIntro;
+        }
       }
     }
-  }, [setDuration, currentTrack]);
+  }, [setDuration, currentTrack, clearPendingSeekPosition]);
 
   // 快切评分逻辑
   const handlePreviousOrNext = useCallback(async (direction: 'prev' | 'next') => {
@@ -299,15 +363,67 @@ export function PlayerBar() {
 
   if (!currentTrack) {
     return (
-      <div className="h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center text-gray-500">
+      <div className="h-28 md:h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center text-gray-500">
         请选择音乐播放
       </div>
     );
   }
 
   return (
-    <div className="h-24 bg-gray-900 border-t border-gray-800 px-4">
-      <div className="h-full flex items-center gap-4">
+    <div className="h-28 md:h-24 bg-gray-900 border-t border-gray-800 px-2 md:px-4">
+      {/* 移动端布局 (竖屏): 两行显示 */}
+      <div className="md:hidden h-full flex flex-col justify-center py-1">
+        {/* 第一行: 曲目信息 + 控制按钮 */}
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-medium truncate text-sm">{currentTrack.title}</div>
+            <div className="text-gray-400 text-xs truncate">{currentTrack.artist || '未知艺术家'}</div>
+          </div>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button onClick={handleSkipBackward} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs">⏪{skipAmounts.backward}s</button>
+            <button onClick={handleSkipForward} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs">{skipAmounts.forward}s⏩</button>
+            <button onClick={handleDeleteAndNext} className="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs">🗑️</button>
+            <button onClick={handleAddToFavorites} className="px-2 py-1 bg-purple-700 hover:bg-purple-600 rounded text-xs">❤️</button>
+          </div>
+        </div>
+
+        {/* 第二行: 播放器 */}
+        <div className="flex-1 min-h-0">
+          <style>{`
+            .rhap_loop-button { display: none !important; }
+            .rhap_main { flex-direction: column !important; }
+            .rhap_controls-section { margin-top: -4px !important; }
+          `}</style>
+          <AudioPlayer
+            ref={playerRef}
+            src={streamUrl || undefined}
+            showSkipControls
+            showJumpControls={false}
+            onClickPrevious={() => handlePreviousOrNext('prev')}
+            onClickNext={() => handlePreviousOrNext('next')}
+            onPlay={handlePlay}
+            onPause={handlePause}
+            onEnded={handleEnded}
+            onLoadedMetaData={handleLoadedMetadata}
+            volume={volume / 100}
+            layout="stacked"
+            style={{ backgroundColor: 'transparent', boxShadow: 'none' }}
+          />
+        </div>
+
+        {/* 第三行: 播放模式 + 评分 */}
+        <div className="flex items-center gap-2 text-xs">
+          <button onClick={handleTogglePlayMode} className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 rounded" title={playModeLabel}>
+            {playModeIcon} {playModeLabel}
+          </button>
+          <span className="text-gray-500">评分: {currentTrack.rating}</span>
+          <button onClick={() => updateRating(currentTrack.id, 1)} className="text-green-500 hover:text-green-400">👍</button>
+          <button onClick={() => updateRating(currentTrack.id, -1)} className="text-red-500 hover:text-red-400">👎</button>
+        </div>
+      </div>
+
+      {/* 桌面端布局 (横屏): 原有单行布局 */}
+      <div className="hidden md:flex h-full items-center gap-4">
         {/* 曲目信息 */}
         <div className="flex-shrink-0 w-64">
           <div className="text-white font-medium truncate">{currentTrack.title}</div>

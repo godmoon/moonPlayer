@@ -178,6 +178,64 @@ pm2 logs moonplayer-server
 
 ## 最近更新
 
+### 2026-04-14: 历史记录恢复播放位置
+
+- **问题**: 从历史记录选择播放列表时，只恢复了文件，没有恢复到上次播放的时间位置
+- **原因**: 
+  - 原实现使用 `setTimeout` 延迟设置播放位置，不可靠
+  - 只在暂停/结束时记录位置，播放过程中不记录
+- **解决方案**:
+  - `playerStore.ts` 新增 `pendingSeekPosition` 状态和 `setPendingSeekPosition`/`clearPendingSeekPosition` 方法
+  - `HistoryView.tsx` 在设置音轨后用 `setTimeout` 设置 `pendingSeekPosition`（确保状态更新顺序）
+  - `AudioPlayer.tsx` 在 `onLoadedMetadata` 事件中从 store 获取最新 `pendingSeekPosition` 并跳转
+  - 新增定期记录播放位置（每5秒）
+  - 新增离开页面时通过 `sendBeacon` 记录位置
+  - 播放位置恢复优先级高于片头跳过
+
+### 2026-04-14: 导航栏拖拽排序
+
+- **功能**: Web 端左侧导航栏支持上下拖动排序，默认打开网页时进入排第一的导航
+- **实现**:
+  - 后端新增 `settings` 表的 `nav_order` 字段存储导航顺序
+  - 后端新增路由文件 `server/src/routes/settings.ts`
+    - `GET /api/settings/nav-order` 获取导航顺序
+    - `PUT /api/settings/nav-order` 设置导航顺序
+  - 前端修改 `Sidebar.tsx`，使用 HTML5 Drag and Drop API 实现拖拽排序
+  - 前端修改 `App.tsx`，登录后从后端获取导航顺序，默认激活第一项
+  - 前端新增 `api.ts` 的 `getNavOrder()` 和 `setNavOrder()` 函数
+
+### 2026-04-14: 播放列表目录来源支持修改子目录设置
+
+- **功能**: 在播放列表来源列表中，目录类型的来源右侧显示"包含子目录"勾选框
+- **实现**:
+  - 后端新增 `PUT /api/playlists/:id/items/:itemId` 接口，支持更新 `include_subdirs` 字段
+  - 前端修改来源列表，目录来源从只读显示改为可编辑的勾选框
+  - 变更后自动触发重新扫描
+
+### 2026-04-14: FLAC/WMA/APE 等格式播放修复
+
+- **问题**: FLAC 等浏览器不支持的格式在播放器中不显示总时长，进度条无法拖动
+- **原因**: 转码流直接输出 MP3，不支持 HTTP Range 请求
+- **解决方案**: 实现转码缓存机制
+  - 首次播放时将 FLAC/WMA/APE/WAV/AAC 转码为 MP3 缓存到 `~/.moonplayer/transcode_cache/`
+  - 后续播放直接流式传输缓存文件，支持完整 Range 请求
+  - 缓存文件以源文件路径 MD5 命名，源文件更新后自动重新转码
+  - 使用 192kbps MP3 作为转码格式
+- **新增文件**: `os` 和 `crypto` 模块用于缓存路径和文件名处理
+- **新增函数**: `ensureCacheDir()`, `getCachePath()`, `transcodeToFile()`
+
+### 2026-04-14: 移动端适配优化
+
+- **侧边栏 (Sidebar)**: 移动端 (<768px) 默认收起，响应式调整内边距和字体大小
+- **播放器 (AudioPlayer)**: 移动端竖屏布局重构
+  - 高度从 24 增加到 28 (h-28)
+  - 桌面端保持原单行布局 (md:flex)
+  - 移动端改为三行布局：
+    - 第一行：曲目信息 + 快捷控制按钮 (快退/快进/删除/收藏)
+    - 第二行：播放器进度条
+    - 第三行：播放模式 + 评分按钮
+  - 使用 Tailwind 的 `md:` 前缀实现响应式切换
+
 ### 2026-04-14: 鉴权系统 + Cookie 修复
 
 - 新增管理员账户系统

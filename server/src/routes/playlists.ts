@@ -447,6 +447,54 @@ export async function playlistRoutes(app: FastifyInstance) {
     };
   });
 
+  // 更新播放列表项
+  app.put('/api/playlists/:id/items/:itemId', async (req, reply) => {
+    const { id, itemId } = req.params as { id: string; itemId: string };
+    const { includeSubdirs, filterRegex, filterArtist, filterAlbum, filterTitle } = req.body as {
+      includeSubdirs?: boolean;
+      filterRegex?: string;
+      filterArtist?: string;
+      filterAlbum?: string;
+      filterTitle?: string;
+    };
+
+    const item = db.prepare('SELECT * FROM playlist_items WHERE id = ? AND playlist_id = ?').get(Number(itemId), Number(id)) as any;
+    if (!item) {
+      return reply.code(404).send({ error: '来源项不存在' });
+    }
+
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (includeSubdirs !== undefined) {
+      updates.push('include_subdirs = ?');
+      values.push(includeSubdirs ? 1 : 0);
+    }
+    if (filterRegex !== undefined) {
+      updates.push('filter_regex = ?');
+      values.push(filterRegex || null);
+    }
+    if (filterArtist !== undefined) {
+      updates.push('filter_artist = ?');
+      values.push(filterArtist || null);
+    }
+    if (filterAlbum !== undefined) {
+      updates.push('filter_album = ?');
+      values.push(filterAlbum || null);
+    }
+    if (filterTitle !== undefined) {
+      updates.push('filter_title = ?');
+      values.push(filterTitle || null);
+    }
+
+    if (updates.length > 0) {
+      values.push(Number(itemId));
+      db.prepare(`UPDATE playlist_items SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    }
+
+    return { success: true };
+  });
+
   // 删除播放列表项
   app.delete('/api/playlists/:id/items/:itemId', async (req, reply) => {
     const { id, itemId } = req.params as { id: string; itemId: string };

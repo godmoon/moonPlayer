@@ -195,7 +195,8 @@ function initDatabase(db: Database.Database) {
     ['music_paths', '/mnt/music/'],
     ['default_play_mode', 'sequential'],
     ['volume', '80'],
-    ['favorites_playlist_id', '0']
+    ['favorites_playlist_id', '0'],
+    ['nav_order', 'browse,playlists,current,history,ratings,settings']
   ];
 
   const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');

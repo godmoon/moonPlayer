@@ -2,6 +2,8 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { getDatabase } from '../db/schema.js';
 import { parseFile } from 'music-metadata';
@@ -10,6 +12,22 @@ import { createClient } from 'webdav';
 // 需要 FFmpeg 支持的格式
 const NEEDS_TRANSCODE = ['.wma', '.ape', '.flac', '.wav', '.aac'];
 const TRANSCODE_FORMAT = '.mp3';
+
+// 转码缓存目录
+const TRANSCODE_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'transcode_cache');
+
+// 确保缓存目录存在
+function ensureCacheDir() {
+  if (!fs.existsSync(TRANSCODE_CACHE_DIR)) {
+    fs.mkdirSync(TRANSCODE_CACHE_DIR, { recursive: true });
+  }
+}
+
+// 获取缓存文件路径
+function getCachePath(filePath: string): string {
+  const hash = crypto.createHash('md5').update(filePath).digest('hex');
+  return path.join(TRANSCODE_CACHE_DIR, `${hash}.mp3`);
+}
 
 export async function streamRoutes(app: FastifyInstance) {
   const db = getDatabase();
@@ -35,13 +53,56 @@ export async function streamRoutes(app: FastifyInstance) {
 
     // 检查是否需要转码（浏览器不支持的格式）
     if (needsTranscode(filePath)) {
-      reply.header('Content-Type', 'audio/mpeg');
-      try {
-        const stream = await transcodeStream(filePath);
-        return reply.send(stream);
-      } catch (err) {
-        return reply.code(500).send({ error: '转码失败' });
+      ensureCacheDir();
+      const cachePath = getCachePath(filePath);
+      
+      // 检查缓存是否存在且有效
+      let useCache = false;
+      if (fs.existsSync(cachePath)) {
+        try {
+          const sourceStat = fs.statSync(filePath);
+          const cacheStat = fs.statSync(cachePath);
+          // 缓存比源文件新，使用缓存
+          if (cacheStat.mtime > sourceStat.mtime) {
+            useCache = true;
+          }
+        } catch {}
       }
+      
+      // 如果没有有效缓存，执行转码
+      if (!useCache) {
+        try {
+          await transcodeToFile(filePath, cachePath);
+        } catch (err) {
+          return reply.code(500).send({ error: '转码失败' });
+        }
+      }
+      
+      // 现在从缓存文件流式传输（支持完整 Range）
+      const stat = fs.statSync(cachePath);
+      const fileSize = stat.size;
+      
+      reply.header('Content-Type', 'audio/mpeg');
+      reply.header('Accept-Ranges', 'bytes');
+      
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunkSize = end - start + 1;
+
+        reply.code(206);
+        reply.header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        reply.header('Content-Length', chunkSize);
+
+        const stream = fs.createReadStream(cachePath, { start, end });
+        return reply.send(stream);
+      }
+
+      // 非 Range 请求，发送整个文件
+      reply.header('Content-Length', fileSize);
+      return reply.send(fs.createReadStream(cachePath));
     }
 
     const stat = fs.statSync(filePath);
@@ -179,6 +240,12 @@ export async function streamRoutes(app: FastifyInstance) {
   });
 }
 
+// 获取文件时长（用于转码流的 Range 支持）
+// 已弃用，改用缓存文件方案
+// async function getFileDuration(filePath: string): Promise<number | null> {
+//   return getDurationViaFfprobe(filePath);
+// }
+
 function getMimeType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   const mimeTypes: Record<string, string> = {
@@ -200,7 +267,40 @@ function needsTranscode(filePath: string): boolean {
   return NEEDS_TRANSCODE.includes(ext);
 }
 
-// 使用 FFmpeg 转码流
+// 转码到文件（缓存）
+function transcodeToFile(filePath: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-i', filePath,
+      '-f', 'mp3',
+      '-ab', '192k',
+      '-vn',
+      '-y', // 覆盖已存在文件
+      outputPath
+    ];
+    
+    const ffmpeg = spawn('ffmpeg', args);
+    
+    let stderr = '';
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+    
+    ffmpeg.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`FFmpeg 转码失败 (code ${code}): ${stderr}`));
+      }
+    });
+    
+    ffmpeg.on('error', (err) => {
+      reject(new Error(`FFmpeg 启动失败: ${err.message}`));
+    });
+  });
+}
+
+// 使用 FFmpeg 转码流（保留用于流式转码场景）
 function transcodeStream(filePath: string, start?: number): Promise<NodeJS.ReadableStream> {
   return new Promise((resolve, reject) => {
     const args = [

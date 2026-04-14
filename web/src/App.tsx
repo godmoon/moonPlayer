@@ -10,12 +10,13 @@ import { HistoryView } from './components/HistoryView';
 import { CurrentPlaylist } from './components/CurrentPlaylist';
 import { Login } from './components/Login';
 import { Setup } from './components/Setup';
+import { getNavOrder } from './stores/api';
 
 type AuthState = 'checking' | 'needSetup' | 'needLogin' | 'authenticated';
 
 function App() {
   const [authState, setAuthState] = useState<AuthState>('checking');
-  const [activeTab, setActiveTab] = useState<Tab>('browse');
+  const [activeTab, setActiveTab] = useState<Tab | null>(null);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
 
   // 检查登录状态
@@ -42,6 +43,16 @@ function App() {
 
       if (checkData.authenticated) {
         setAuthState('authenticated');
+        // 加载导航顺序，设置第一个为默认 tab
+        getNavOrder().then(order => {
+          if (order && order.length > 0) {
+            setActiveTab(order[0] as Tab);
+          } else {
+            setActiveTab('browse');
+          }
+        }).catch(() => {
+          setActiveTab('browse');
+        });
       } else {
         setAuthState('needLogin');
       }
@@ -91,6 +102,14 @@ function App() {
   }
 
   // 已登录
+  if (activeTab === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-950">
+        <div className="text-white">加载中...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-white">
       {/* 主内容区 */}

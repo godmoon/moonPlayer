@@ -20,7 +20,7 @@ export function HistoryView() {
   const [loading, setLoading] = useState(true);
   const [deleteConfirm, setDeleteConfirm] = useState<HistoryItem | null>(null);
 
-  const { setCurrentPlaylist, setCurrentTrack, setIsPlaying, currentPlaylist } = usePlayerStore();
+  const { setCurrentPlaylist, setCurrentTrack, setIsPlaying, setPendingSeekPosition, currentPlaylist } = usePlayerStore();
 
   const loadHistory = useCallback(async () => {
     setLoading(true);
@@ -75,21 +75,18 @@ export function HistoryView() {
       if (!lastTrack) {
         lastTrack = trackList[0];
       }
-      
-      // 设置音轨但不立即播放，等音频加载后再设置位置
-      setCurrentTrack(lastTrack);
-      setIsPlaying(true);
 
-      // 设置播放位置（需要在音频加载后设置）
+      // 先设置音轨
+      setCurrentTrack(lastTrack);
+      // 然后设置待恢复的播放位置（AudioPlayer 会在音频加载后自动跳转）
+      // 必须在 setCurrentTrack 之后设置，否则会被重置
       if (item.position > 0) {
-        // 延迟设置位置，等待音频加载
+        // 使用 setTimeout 确保在状态更新后设置
         setTimeout(() => {
-          const audio = document.querySelector('audio');
-          if (audio) {
-            audio.currentTime = item.position;
-          }
-        }, 500);
+          setPendingSeekPosition(item.position);
+        }, 0);
       }
+      setIsPlaying(true);
     } catch (err) {
       console.error('继续播放失败:', err);
     }

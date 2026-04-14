@@ -1,6 +1,6 @@
 // 播放列表管理组件
 import { useState, useEffect, useCallback } from 'react';
-import { getPlaylists, getPlaylist, createPlaylist, deletePlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, addPlaylistItem, removePlaylistItem, browseDirectory, getRoots } from '../stores/api';
+import { getPlaylists, getPlaylist, createPlaylist, deletePlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, addPlaylistItem, removePlaylistItem, updatePlaylistItem, browseDirectory, getRoots } from '../stores/api';
 import { usePlayerStore } from '../stores/playerStore';
 import type { Track, Playlist } from '../stores/playerStore';
 
@@ -263,6 +263,26 @@ export function PlaylistDetail({ playlistId, onClose }: {
     }
   };
 
+  // 更新目录来源的子目录设置
+  const handleToggleSubdirs = async (item: any) => {
+    const newValue = item.include_subdirs === 1 ? false : true;
+    try {
+      await updatePlaylistItem(playlistId, item.id, { includeSubdirs: newValue });
+      // 更新本地状态
+      setPlaylist((prev: any) => ({
+        ...prev,
+        items: prev.items.map((i: any) =>
+          i.id === item.id ? { ...i, include_subdirs: newValue ? 1 : 0 } : i
+        )
+      }));
+      // 自动重新扫描
+      handleRefreshAndPlay();
+    } catch (err) {
+      console.error('更新设置失败:', err);
+      alert('更新失败');
+    }
+  };
+
   // 删除来源
   const handleRemoveSource = async (itemId: number) => {
     if (!confirm('确定删除此来源?')) return;
@@ -385,8 +405,16 @@ export function PlaylistDetail({ playlistId, onClose }: {
                 <span className="flex-1 truncate text-gray-300" title={item.path}>
                   {item.type === 'filter' ? `正则: ${item.filter_regex || '(全部)'}` : item.path}
                 </span>
-                {item.type === 'directory' && item.include_subdirs === 1 && (
-                  <span className="text-xs text-gray-500">含子目录</span>
+                {item.type === 'directory' && (
+                  <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={item.include_subdirs === 1}
+                      onChange={() => handleToggleSubdirs(item)}
+                      className="w-3 h-3 rounded"
+                    />
+                    含子目录
+                  </label>
                 )}
                 <button
                   onClick={() => handleRemoveSource(item.id)}

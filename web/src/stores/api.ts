@@ -67,6 +67,10 @@ export async function addPlaylistItem(playlistId: number, type: 'directory' | 'f
   return res.data;
 }
 
+export async function updatePlaylistItem(playlistId: number, itemId: number, data: { includeSubdirs?: boolean; filterRegex?: string }): Promise<void> {
+  await api.put(`/playlists/${playlistId}/items/${itemId}`, data);
+}
+
 export async function removePlaylistItem(playlistId: number, itemId: number): Promise<void> {
   await api.delete(`/playlists/${playlistId}/items/${itemId}`);
 }
@@ -247,4 +251,15 @@ export async function recordSkipIntro(trackId: number, playlistId: number, posit
 
 export async function recordSkipOutro(trackId: number, playlistId: number, position: number): Promise<void> {
   await api.post('/skip/outro', { trackId, playlistId, position });
+}
+
+// ========== 导航设置 ==========
+
+export async function getNavOrder(): Promise<string[]> {
+  const res = await api.get('/settings/nav-order');
+  return res.data.order;
+}
+
+export async function setNavOrder(order: string[]): Promise<void> {
+  await api.put('/settings/nav-order', { order });
 }
