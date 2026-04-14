@@ -1,6 +1,6 @@
 // 文件浏览器组件
 import { useState, useEffect, useCallback } from 'react';
-import { browseDirectory, createPlaylist, scanTracks, getPlaylists, addPlaylistItem, refreshPlaylist, findPlaylistForDir, getWebdavConfigs, browseWebdav, type WebdavConfig } from '../stores/api';
+import { browseDirectory, createPlaylist, scanTracks, getPlaylists, addPlaylistItem, refreshPlaylist, findPlaylistForDir, getWebdavConfigs, browseWebdav, scanWebdavDirectory, type WebdavConfig } from '../stores/api';
 import { usePlayerStore } from '../stores/playerStore';
 import type { Track, Playlist } from '../stores/playerStore';
 
@@ -190,34 +190,39 @@ export function FileBrowser({ onPlay }: {
     if (!currentWebdav) return;
     
     try {
-      // 使用当前目录的文件列表作为播放列表
-      const trackList: Track[] = files.map((f, index) => ({
-        id: -Date.now() - index,
-        path: `webdav://${currentWebdav.id}${f.path}`,
-        title: f.name.replace(/\.[^.]+$/, ''),
-        artist: '',
-        album: '',
-        duration: 0,
-        rating: 0,
-        playCount: 0,
-        skipCount: 0,
-        dateAdded: Date.now()
+      // 扫描当前目录并创建播放列表
+      const result = await scanWebdavDirectory(currentWebdav.id, {
+        dir: currentPath,
+        playlistName: currentWebdav.name + ': ' + (currentPath.split('/').filter(Boolean).pop() || '根目录'),
+        includeSubdirs: false
+      });
+      
+      const trackList: Track[] = result.tracks.map((t: any) => ({
+        id: t.id,
+        path: t.path,
+        title: t.title,
+        artist: t.artist || '',
+        album: t.album || '',
+        duration: t.duration || 0,
+        rating: t.rating || 0,
+        playCount: t.play_count || 0,
+        skipCount: t.skip_count || 0,
+        dateAdded: t.date_added || Date.now()
       }));
       
       const pl: Playlist = {
-        id: -1,
-        name: currentWebdav.name,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        id: result.playlist.id,
+        name: result.playlist.name,
+        createdAt: result.playlist.created_at,
+        updatedAt: result.playlist.updated_at,
         isAuto: true,
-        playMode: 'sequential'
+        playMode: result.playlist.play_mode || 'sequential'
       };
       
       setCurrentPlaylist(pl, trackList);
       
       // 找到当前点击的音轨
-      const targetIndex = files.findIndex(f => f.path === filePath);
-      const targetTrack = targetIndex >= 0 ? trackList[targetIndex] : trackList[0];
+      const targetTrack = trackList.find((t: Track) => t.path === `webdav://${currentWebdav.id}${filePath}`) || trackList[0];
       setCurrentTrack(targetTrack);
       setIsPlaying(true);
     } catch (err) {
@@ -227,6 +232,12 @@ export function FileBrowser({ onPlay }: {
 
   // 播放整个目录
   const handlePlayDirectory = async (dirPath: string) => {
+    // WebDAV 目录播放
+    if (isWebdavView && currentWebdav) {
+      handlePlayWebdavDirectory(dirPath);
+      return;
+    }
+    
     try {
       // 先检查是否已有匹配的播放列表
       const existing = await findPlaylistForDir(dirPath);
@@ -278,6 +289,48 @@ export function FileBrowser({ onPlay }: {
       }
     } catch (err) {
       console.error('播放目录失败:', err);
+    }
+  };
+
+  // 播放 WebDAV 目录
+  const handlePlayWebdavDirectory = async (dirPath: string) => {
+    if (!currentWebdav) return;
+    
+    try {
+      const dirName = dirPath.split('/').filter(Boolean).pop() || '根目录';
+      const result = await scanWebdavDirectory(currentWebdav.id, {
+        dir: dirPath,
+        playlistName: currentWebdav.name + ': ' + dirName,
+        includeSubdirs: true
+      });
+      
+      const trackList: Track[] = result.tracks.map((t: any) => ({
+        id: t.id,
+        path: t.path,
+        title: t.title,
+        artist: t.artist || '',
+        album: t.album || '',
+        duration: t.duration || 0,
+        rating: t.rating || 0,
+        playCount: t.play_count || 0,
+        skipCount: t.skip_count || 0,
+        dateAdded: t.date_added || Date.now()
+      }));
+      
+      const pl: Playlist = {
+        id: result.playlist.id,
+        name: result.playlist.name,
+        createdAt: result.playlist.created_at,
+        updatedAt: result.playlist.updated_at,
+        isAuto: true,
+        playMode: result.playlist.play_mode || 'sequential'
+      };
+      
+      setCurrentPlaylist(pl, trackList);
+      setCurrentTrack(trackList[0]);
+      setIsPlaying(true);
+    } catch (err) {
+      console.error('播放 WebDAV 目录失败:', err);
     }
   };
 

@@ -230,6 +230,16 @@ export function getWebdavStreamUrl(configId: number, filePath: string): string {
   return `/api/webdav/${configId}/stream?path=${encodeURIComponent(filePath)}`;
 }
 
+export async function scanWebdavDirectory(configId: number, options: {
+  dir?: string;
+  playlistId?: number;
+  playlistName?: string;
+  includeSubdirs?: boolean;
+}): Promise<{ playlist: any; tracks: any[]; scanned: number }> {
+  const res = await api.post(`/webdav/${configId}/scan`, options);
+  return res.data;
+}
+
 export async function recordSkipIntro(trackId: number, playlistId: number, position: number): Promise<void> {
   await api.post('/skip/intro', { trackId, playlistId, position });
 }

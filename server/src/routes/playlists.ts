@@ -4,6 +4,7 @@ import { getDatabase } from '../db/schema.js';
 import { parseFile } from 'music-metadata';
 import fs from 'fs';
 import path from 'path';
+import { createClient } from 'webdav';
 
 export async function playlistRoutes(app: FastifyInstance) {
   const db = getDatabase();
@@ -194,6 +195,23 @@ export async function playlistRoutes(app: FastifyInstance) {
     const audioExtensions = /\.(mp3|flac|wav|ogg|m4a|aac|wma|ape)$/i;
     const trackPaths: string[] = [];
 
+    // WebDAV 客户端缓存
+    const webdavClients = new Map<number, any>();
+    
+    async function getWebdavClient(configId: number) {
+      if (!webdavClients.has(configId)) {
+        const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as any;
+        if (config) {
+          const client = createClient(config.url, {
+            username: config.username || undefined,
+            password: config.password || undefined
+          });
+          webdavClients.set(configId, client);
+        }
+      }
+      return webdavClients.get(configId);
+    }
+
     for (const item of items) {
       if (item.type === 'file') {
         if (audioExtensions.test(item.path)) {
@@ -202,22 +220,50 @@ export async function playlistRoutes(app: FastifyInstance) {
       } else if (item.type === 'directory') {
         const dirPath = item.path;
         const includeSubdirs = item.include_subdirs === 1;
-
-        function scanDir(dir: string) {
-          try {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const entry of entries) {
-              if (entry.isDirectory() && includeSubdirs) {
-                scanDir(path.join(dir, entry.name));
-              } else if (entry.isFile() && audioExtensions.test(entry.name)) {
-                trackPaths.push(path.join(dir, entry.name));
+        
+        // 检查是否是 WebDAV 路径
+        const webdavMatch = dirPath.match(/^webdav:\/\/(\d+)(.*)$/);
+        if (webdavMatch) {
+          // WebDAV 目录扫描
+          const configId = parseInt(webdavMatch[1], 10);
+          const webdavDir = webdavMatch[2];
+          const client = await getWebdavClient(configId);
+          
+          if (client) {
+            async function scanWebdavDir(dir: string) {
+              try {
+                const contents = await client.getDirectoryContents(dir);
+                for (const entry of contents as any[]) {
+                  if (entry.type === 'directory' && includeSubdirs) {
+                    await scanWebdavDir(entry.filename);
+                  } else if (entry.type === 'file' && audioExtensions.test(entry.basename)) {
+                    trackPaths.push(`webdav://${configId}${entry.filename}`);
+                  }
+                }
+              } catch (err) {
+                // 忽略无法读取的目录
               }
             }
-          } catch (err) {
-            // 忽略无法读取的目录
+            await scanWebdavDir(webdavDir);
           }
+        } else {
+          // 本地目录扫描
+          function scanDir(dir: string) {
+            try {
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              for (const entry of entries) {
+                if (entry.isDirectory() && includeSubdirs) {
+                  scanDir(path.join(dir, entry.name));
+                } else if (entry.isFile() && audioExtensions.test(entry.name)) {
+                  trackPaths.push(path.join(dir, entry.name));
+                }
+              }
+            } catch (err) {
+              // 忽略无法读取的目录
+            }
+          }
+          scanDir(dirPath);
         }
-        scanDir(dirPath);
       } else if (item.type === 'filter') {
         // 正则/过滤器匹配：遍历所有音乐目录
         const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
@@ -274,18 +320,31 @@ export async function playlistRoutes(app: FastifyInstance) {
     const trackIds: number[] = [];
 
     for (const trackPath of trackPaths) {
-      insertTrack.run(trackPath, path.basename(trackPath), Date.now());
+      // WebDAV 文件路径格式: webdav://{configId}{filePath}
+      const webdavMatch = trackPath.match(/^webdav:\/\/(\d+)(.*)$/);
+      
+      // 提取标题（去掉扩展名）
+      let title: string;
+      if (webdavMatch) {
+        // WebDAV 文件：从路径提取文件名
+        title = path.basename(webdavMatch[2]).replace(/\.[^.]+$/, '');
+      } else {
+        title = path.basename(trackPath).replace(/\.[^.]+$/, '');
+      }
+      
+      insertTrack.run(trackPath, title, Date.now());
       const track = getTrack.get(trackPath) as { id: number; duration: number | null; artist: string | null; album: string | null } | undefined;
       if (track) {
-        // 如果 duration 为空，解析元数据
-        if (track.duration === null) {
+        // 本地文件且 duration 为空，解析元数据
+        // WebDAV 文件不在此处解析元数据（播放时再获取）
+        if (track.duration === null && !webdavMatch) {
           try {
             const metadata = await parseFile(trackPath);
-            const title = metadata.common.title || path.basename(trackPath, path.extname(trackPath));
+            const metaTitle = metadata.common.title || title;
             const artist = metadata.common.artist || null;
             const album = metadata.common.album || null;
             const duration = metadata.format.duration || null;
-            updateTrack.run(title, artist, album, duration, track.id);
+            updateTrack.run(metaTitle, artist, album, duration, track.id);
           } catch {
             // 解析失败，保持原样
           }
