@@ -105,10 +105,10 @@ pm2 logs moonplayer-server
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PORT` | 3000 | 监听端口 |
-| `HOST` | 0.0.0.0 | 监听地址 |
+| 变量         | 默认值         | 说明                            |
+| ---------- | ----------- | ----------------------------- |
+| `PORT`     | 3000        | 监听端口                          |
+| `HOST`     | 0.0.0.0     | 监听地址                          |
 | `NODE_ENV` | development | 运行模式 (production 启用安全 Cookie) |
 
 ## 数据存储
@@ -278,6 +278,7 @@ pm2 logs moonplayer-server
 ### 登录后请求仍返回 401
 
 检查点：
+
 1. 前端所有 fetch 和 axios 请求必须设置 `credentials: 'include'`
 2. 后端 CORS 配置必须包含 `credentials: true`
 3. Cookie 的 sameSite 属性设为 'lax'（允许同站和顶级导航）

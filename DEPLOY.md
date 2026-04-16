@@ -3,12 +3,14 @@
 ## 快速启动
 
 ### 开发模式
+
 ```bash
 cd /home/moon/ai/moonPlayer/server
 npm run dev
 ```
 
 ### 生产模式（PM2）
+
 ```bash
 # 创建日志目录
 mkdir -p ~/.moonplayer/logs
@@ -28,6 +30,7 @@ pm2 stop moonplayer-server
 ```
 
 ### 开机自启
+
 ```bash
 pm2 startup
 pm2 save
@@ -41,9 +44,11 @@ pm2 save
 ## 配置
 
 ### 音乐目录
+
 默认：`/mnt/music/`
 
 可在设置页面修改，或通过 API：
+
 ```bash
 curl -X POST http://localhost:3000/api/music-path \
   -H "Content-Type: application/json" \
@@ -51,17 +56,20 @@ curl -X POST http://localhost:3000/api/music-path \
 ```
 
 ### 数据库位置
+
 `~/.moonplayer/moonplayer.db`
 
 ## 故障排查
 
 ### 端口被占用
+
 ```bash
 lsof -i :3000
 kill -9 <PID>
 ```
 
 ### 服务无法启动
+
 ```bash
 # 检查依赖
 cd /home/moon/ai/moonPlayer/server

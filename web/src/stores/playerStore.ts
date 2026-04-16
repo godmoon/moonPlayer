@@ -68,6 +68,13 @@ interface PlayerState {
 
   // 更新评分
   updateTrackRating: (trackId: number, delta: number) => void;
+
+    // 👇 新增：缓存最近播放位置（用于历史记录实时刷新）
+  lastPlayedPositions: Record<string, number>;
+
+  // 👇 新增：刷新历史播放位置的方法
+  refreshTrackHistoryPosition: (trackId: number, playlistId: number, position: number) => void;
+
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -83,6 +90,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   shuffleQueue: [],
   shuffleIndex: 0,
 
+  // 👇 新增
+  lastPlayedPositions: {},
+
+  // 👇 新增方法
+  refreshTrackHistoryPosition: (trackId, playlistId, position) => {
+    const key = `${playlistId}-${trackId}`;
+    set((state) => ({
+      lastPlayedPositions: {
+        ...state.lastPlayedPositions,
+        [key]: position,
+      },
+    }));
+  },
+
+  // ... 下面所有你的原有代码 完全不动
   setCurrentTrack: (track) => set({ currentTrack: track }),
 
   setCurrentPlaylist: (playlist, tracks) => set({

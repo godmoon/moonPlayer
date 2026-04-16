@@ -52,59 +52,62 @@ export function HistoryView() {
   };
 
   const handleContinuePlay = async (item: HistoryItem) => {
-    try {
-      // 在切换播放列表之前，先记录当前播放列表的位置
-      // 这样下次点击历史记录时能恢复到正确位置
-      const currentPlayer = usePlayerStore.getState();
-      if (currentPlayer.currentPlaylist && currentPlayer.currentTrack) {
-        const audio = document.querySelector('audio');
-        if (audio) {
-          const position = audio.currentTime || 0;
-          // 记录当前播放列表的位置
-          await recordHistory(currentPlayer.currentPlaylist.id, currentPlayer.currentTrack.id, position);
+  try {
+    // 在切换播放列表之前，先记录当前播放列表的位置
+    const currentPlayer = usePlayerStore.getState();
+    if (currentPlayer.currentPlaylist && currentPlayer.currentTrack) {
+      const audio = document.querySelector('audio');
+      if (audio) {
+        const position = audio.currentTime;
+        const duration = audio.duration || 0;
+
+        // 🔥 修复：只有有效进度才保存，绝对不保存 0！
+        if (position > 1.0 && duration > 0 && position < duration) {
+          console.log("✅ 切换前保存有效进度:", position);
+          await recordHistory(
+            currentPlayer.currentPlaylist.id,
+            currentPlayer.currentTrack.id,
+            position
+          );
+        } else {
+          console.log("⛔ 切换前不保存无效进度（0），避免覆盖历史");
         }
       }
-
-      // 先设置待恢复的播放位置（在设置音轨之前）
-      if (item.position > 0) {
-        setPendingSeekPosition(item.position, item.track_id);
-        console.log('[HistoryView] 设置待恢复位置:', item.position, 'trackId:', item.track_id);
-      }
-
-      // 刷新播放列表获取音轨
-      const refreshed = await refreshPlaylist(item.playlist_id);
-      const trackList = refreshed.tracks as Track[];
-
-      if (trackList.length === 0) return;
-
-      const pl: Playlist = {
-        id: item.playlist_id,
-        name: item.playlist_name,
-        createdAt: refreshed.playlist.created_at,
-        updatedAt: refreshed.playlist.updated_at,
-        isAuto: refreshed.playlist.is_auto === 1,
-        playMode: refreshed.playlist.play_mode,
-        skipIntro: refreshed.playlist.skip_intro,
-        skipOutro: refreshed.playlist.skip_outro
-      };
-      setCurrentPlaylist(pl, trackList);
-
-      // 找到上次播放的音轨，找不到就用第一个
-      let lastTrack = trackList.find((t: Track) => t.id === item.track_id);
-      if (!lastTrack) {
-        lastTrack = trackList[0];
-      }
-
-      setCurrentTrack(lastTrack);
-      setIsPlaying(true);
-      
-      // 切换完成后重新加载历史（更新当前位置显示）
-      // 延迟一下确保后端已经更新
-      setTimeout(() => loadHistory(), 500);
-    } catch (err) {
-      console.error('继续播放失败:', err);
     }
-  };
+
+    // 下面的代码完全不动
+    if (item.position > 0) {
+      setPendingSeekPosition(item.position);
+      console.log('[HistoryView] 设置待恢复位置:', item.position, 'trackId:', item.track_id);
+    }
+
+    const refreshed = await refreshPlaylist(item.playlist_id);
+    const trackList = refreshed.tracks as Track[];
+    if (trackList.length === 0) return;
+
+    const pl: Playlist = {
+      id: item.playlist_id,
+      name: item.playlist_name,
+      createdAt: refreshed.playlist.created_at,
+      updatedAt: refreshed.playlist.updated_at,
+      isAuto: refreshed.playlist.is_auto === 1,
+      playMode: refreshed.playlist.play_mode,
+      skipIntro: refreshed.playlist.skip_intro,
+      skipOutro: refreshed.playlist.skip_outro
+    };
+    setCurrentPlaylist(pl, trackList);
+
+    let lastTrack = trackList.find((t: Track) => t.id === item.track_id);
+    if (!lastTrack) lastTrack = trackList[0];
+
+    setCurrentTrack(lastTrack);
+    setIsPlaying(true);
+
+    setTimeout(() => loadHistory(), 500);
+  } catch (err) {
+    console.error('继续播放失败:', err);
+  }
+};
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);

@@ -7,31 +7,29 @@ import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory } 
 import { getDuration } from '../stores/api';
 import { AddToPlaylistModal } from './AddToPlaylistModal';
 
-// 全局待恢复播放位置（使用模块级变量，避免 ref 在组件重渲染时的问题）
+// 全局
 let globalPendingSeekPosition: number | null = null;
-let globalPendingSeekTrackId: number | null = null; // 关联的音轨 ID
+let globalIsSeekConsumed = false;
+let globalLockedPosition: number | null = null; // 👈 加这个
 
-// 设置待恢复播放位置（供外部调用）
-export function setPendingSeekPosition(position: number, trackId?: number) {
+export function setPendingSeekPosition(position: number) {
   globalPendingSeekPosition = position;
-  globalPendingSeekTrackId = trackId ?? null;
-  console.log('[AudioPlayer] 设置待恢复位置:', position, 'trackId:', trackId);
+  globalLockedPosition = position; // 👈 全局锁定
+  globalIsSeekConsumed = false;
+  console.log('[AudioPlayer] ✅ 设置待恢复位置:', position);
 }
 
-// 获取并清除待恢复播放位置
-// 如果 currentTrackId 为 0，跳过 trackId 检查
-function consumePendingSeekPosition(currentTrackId: number): number | null {
-  // 如果 currentTrackId 为 0，跳过检查（用于事件处理时不知道当前 trackId 的情况）
-  if (currentTrackId !== 0 && globalPendingSeekTrackId !== null && globalPendingSeekTrackId !== currentTrackId) {
-    // trackId 不匹配，但仍然返回位置（因为可能是正常的切换）
-    // 这种情况下不清除位置，让后续的调用处理
-    console.log('[AudioPlayer] trackId 不匹配，跳过恢复:', 'expected:', globalPendingSeekTrackId, 'actual:', currentTrackId);
+function consumePendingSeekPosition(): number | null {
+  if (globalIsSeekConsumed) {
+    console.log('[AudioPlayer] 🚫 已消费，不再处理');
     return null;
   }
+
   const pos = globalPendingSeekPosition;
   globalPendingSeekPosition = null;
-  globalPendingSeekTrackId = null;
-  console.log('[AudioPlayer] 消费待恢复位置:', pos);
+  globalIsSeekConsumed = true;
+
+  console.log('[AudioPlayer] ✅ 消费位置:', pos);
   return pos;
 }
 
@@ -101,25 +99,57 @@ export function PlayerBar() {
       audio.pause();
     }
   }, [isPlaying, streamUrl, currentTrack?.id]);
+  
+// 定期记录播放位置 - 最终稳定版
+useEffect(() => {
+  if (!isPlaying || !currentTrack || !currentPlaylist) {
+    return;
+  }
 
-  // 定期记录播放位置（每5秒）
-  useEffect(() => {
-    if (!currentTrack || !currentPlaylist || !isPlaying) return;
+  // 锁定当前歌曲和列表，防止切换时交叉污染
+  const LOCK_PLAYLIST_ID = currentPlaylist.id;
+  const LOCK_TRACK_ID = currentTrack.id;
 
-    const interval = setInterval(() => {
-      if (playerRef.current?.audio?.current) {
-        const position = playerRef.current.audio.current.currentTime;
-        const now = Date.now();
-        // 每5秒记录一次
-        if (now - lastHistoryRecordRef.current >= 5000) {
-          recordHistory(currentPlaylist.id, currentTrack.id, position).catch(() => {});
-          lastHistoryRecordRef.current = now;
-        }
-      }
-    }, 1000); // 每秒检查一次
+  const interval = setInterval(() => {
+    const audio = playerRef.current?.audio?.current;
+    if (!audio) return;
 
-    return () => clearInterval(interval);
-  }, [currentTrack, currentPlaylist, isPlaying]);
+    // 校验：如果歌曲/列表变了，直接跳过
+    const nowState = usePlayerStore.getState();
+    if (
+      nowState.currentPlaylist?.id !== LOCK_PLAYLIST_ID ||
+      nowState.currentTrack?.id !== LOCK_TRACK_ID
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastHistoryRecordRef.current < 5000) {
+      return;
+    }
+
+    const realPos = audio.currentTime;
+    const duration = audio.duration || 0;
+
+    // 安全校验：只发送有效进度，杜绝 0
+    const isValid = realPos > 1.0 && duration > 0 && realPos < duration;
+    if (!isValid) {
+      return;
+    }
+
+    // 上报并更新前端进度
+    recordHistory(LOCK_PLAYLIST_ID, LOCK_TRACK_ID, realPos).catch(() => {});
+    usePlayerStore.getState().refreshTrackHistoryPosition(
+      LOCK_TRACK_ID,
+      LOCK_PLAYLIST_ID,
+      realPos
+    );
+
+    lastHistoryRecordRef.current = now;
+  }, 1000);
+
+  return () => clearInterval(interval);
+}, [currentTrack, currentPlaylist, isPlaying]);
 
   // 离开页面时记录播放位置
   useEffect(() => {
@@ -143,112 +173,121 @@ export function PlayerBar() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [currentTrack, currentPlaylist]);
 
-  // 播放事件处理
-  const handlePlay = useCallback(() => {
-    setIsPlaying(true);
-    playStartedRef.current = Date.now();
-  // 开始播放时记录历史位置
-    if (currentTrack && currentPlaylist && playerRef.current?.audio?.current) {
-      const position = playerRef.current.audio.current.currentTime || 0;
+const handlePlay = useCallback(() => {
+  setIsPlaying(true);
+  playStartedRef.current = Date.now();
+
+  const audio = playerRef.current?.audio?.current;
+  if (audio && globalLockedPosition !== null) {
+    const pos = globalLockedPosition;
+    audio.currentTime = pos;
+    console.log('[AudioPlayer] 🚀 PLAY 事件强制恢复到 =>', pos);
+    globalLockedPosition = null;
+  }
+
+  // 🔥 修复：不依赖 duration，只判断进度是否有效
+  if (currentTrack && currentPlaylist && audio) {
+    const position = audio.currentTime;
+    console.log("[handlePlay] 尝试上报 position:", position);
+
+    // 只判断：>1秒 且 不是刚加载的0
+    if (position > 1.0) {
+      console.log("[handlePlay] ✅ 合法，上报");
       recordHistory(currentPlaylist.id, currentTrack.id, position).catch(() => {});
       lastHistoryRecordRef.current = Date.now();
+    } else {
+      console.log("[handlePlay] ⛔ 拦截无效进度（0 或非法值）");
     }
-  }, [setIsPlaying, currentTrack, currentPlaylist]);
+  }
+}, [setIsPlaying, currentTrack, currentPlaylist]);
 
-  const handlePause = useCallback(() => {
-    setIsPlaying(false);
-    // 记录播放位置到历史
-    if (currentTrack && currentPlaylist && playerRef.current?.audio?.current) {
-      const position = playerRef.current.audio.current.currentTime;
+const handlePause = useCallback(() => {
+  setIsPlaying(false);
+  
+  if (currentTrack && currentPlaylist && playerRef.current?.audio?.current) {
+    const audio = playerRef.current.audio.current;
+    const position = audio.currentTime;
+
+    if (position > 1.0) {
       recordHistory(currentPlaylist.id, currentTrack.id, position).catch(() => {});
     }
-  }, [setIsPlaying, currentTrack, currentPlaylist]);
+  }
+}, [setIsPlaying, currentTrack, currentPlaylist]);
 
-  const handleEnded = useCallback(async () => {
-    if (currentTrack) {
-      await recordPlay(currentTrack.id, true, 0);
-      await updateRating(currentTrack.id, 1);
-      // 记录播放完成（位置为0，表示已播完）
-      if (currentPlaylist) {
-        await recordHistory(currentPlaylist.id, currentTrack.id, 0).catch(() => {});
-      }
-    }
-    // 切歌后继续播放
-    setIsPlaying(true);
-    playNext();
-  }, [currentTrack, currentPlaylist, playNext, updateRating, setIsPlaying]);
+const handleEnded = useCallback(async () => {
+  if (currentTrack) {
+    await recordPlay(currentTrack.id, true, 0);
+    await updateRating(currentTrack.id, 1);
+  }
 
-  const handleLoadedMetadata = useCallback((e: any) => {
-    const audio = e.currentTarget;
-    const duration = audio.duration;
-    console.log('[AudioPlayer] handleLoadedMetadata 触发, duration:', duration, 'readyState:', audio.readyState);
+  setIsPlaying(true);
+  playNext();
+}, [currentTrack, currentPlaylist, playNext, updateRating, setIsPlaying]);
 
-    // 从全局变量获取待恢复的播放位置
-    // 不依赖 currentTrack，因为事件触发时 currentTrack 可能还没更新
-    const pendingPos = consumePendingSeekPosition(0); // 0 表示跳过 trackId 检查
-    console.log('[AudioPlayer] handleLoadedMetadata 获取到的位置:', pendingPos);
+ const handleLoadedMetadata = useCallback((e: any) => {
+  const audio = e.currentTarget;
+  const duration = audio.duration;
 
-    // 如果 duration 是 Infinity 或 NaN（转码流可能出现），需要从服务器获取
-    if (!isFinite(duration) || duration === 0) {
-      // 异步获取时长
-      if (currentTrack) {
-        getDuration(currentTrack.id).then((d) => {
-          if (d && isFinite(d)) {
-            setDuration(d);
-            // 恢复播放位置（优先级高于片头跳过）
-            const asyncPendingPos = consumePendingSeekPosition(0);
-            console.log('[AudioPlayer] 异步获取时长后获取到的位置:', asyncPendingPos);
-            if (asyncPendingPos && asyncPendingPos > 0 && asyncPendingPos < d - 0.5) {
-              console.log('[AudioPlayer] 恢复位置到:', asyncPendingPos);
-              audio.currentTime = asyncPendingPos;
-            } else {
-              // 片头跳过
-              const skipIntro = usePlayerStore.getState().currentPlaylist?.skipIntro || 0;
-              if (skipIntro > 0 && audio.currentTime < skipIntro) {
-                audio.currentTime = skipIntro;
-              }
-            }
-          }
-        }).catch(() => {});
-      }
-    } else {
-      setDuration(duration);
+  console.log('[AudioPlayer] 🎵 元数据加载 duration=', duration, 'currentTime=', audio.currentTime);
 
-      // 恢复播放位置（如果有待恢复的位置，优先级高于片头跳过）
-      // 注意：如果位置等于或接近时长，从头开始播放
-      // 使用 setTimeout 确保在 react-h5-audio-player 内部逻辑之后执行
-      if (pendingPos && pendingPos > 0 && pendingPos < duration - 0.5) {
-        console.log('[AudioPlayer] 准备恢复位置到:', pendingPos);
-        // 延迟设置，确保在播放器内部逻辑之后执行
-        setTimeout(() => {
-          console.log('[AudioPlayer] 延迟恢复位置到:', pendingPos, '当前时间:', audio.currentTime);
-          audio.currentTime = pendingPos;
-          console.log('[AudioPlayer] 设置后当前时间:', audio.currentTime);
-        }, 100);
-      } else {
-        console.log('[AudioPlayer] 不恢复位置，pendingPos:', pendingPos, 'duration:', duration);
-        // 片头跳过（如果当前播放列表有设置）
-        const skipIntro = usePlayerStore.getState().currentPlaylist?.skipIntro || 0;
-        if (skipIntro > 0 && audio.currentTime < skipIntro) {
-          audio.currentTime = skipIntro;
+  const pendingPos = consumePendingSeekPosition();
+  console.log('[AudioPlayer] 🎯 待恢复位置=', pendingPos);
+
+  // 重点：如果已经有成功跳转的记录，直接禁止再次修改时间
+  if (globalIsSeekConsumed && pendingPos === null) {
+    console.log('[AudioPlayer] 🚫 已锁定播放位置，禁止重置！');
+    return;
+  }
+
+  const safeSeek = (pos: number) => {
+    if (!audio || !isFinite(duration)) return;
+    if (pos <= 0 || pos >= duration - 0.5) return;
+
+    try {
+      // 立即设置
+      audio.currentTime = pos;
+
+      // 终极保险：强制锁定 200ms，谁都改不动
+      const lockTime = 200;
+      const start = Date.now();
+      const lock = () => {
+        if (Date.now() - start < lockTime) {
+          audio.currentTime = pos;
+          requestAnimationFrame(lock);
         }
-      }
-    }
-  }, [setDuration, currentTrack]);
+      };
+      lock();
 
-  // 当音频可以播放时也尝试恢复位置（备用方案）
-  const handleCanPlay = useCallback((e: any) => {
-    const audio = e.currentTarget;
-    console.log('[AudioPlayer] handleCanPlay 触发');
-    
-    // 如果有待恢复的位置，尝试跳转
-    const pendingPos = consumePendingSeekPosition(0);
-    console.log('[AudioPlayer] handleCanPlay 获取到的位置:', pendingPos);
-    if (pendingPos && pendingPos > 0 && pendingPos < audio.duration - 0.5) {
-      console.log('[AudioPlayer] handleCanPlay 恢复位置到:', pendingPos);
-      audio.currentTime = pendingPos;
+      console.log('[AudioPlayer] ✅ 锁定播放位置成功 =>', pos);
+    } catch (err) {}
+  };
+
+  // 无限时长
+  if (!isFinite(duration) || duration === 0) {
+    if (currentTrack) {
+      getDuration(currentTrack.id).then(d => {
+        if (d && isFinite(d)) {
+          setDuration(d);
+          safeSeek(pendingPos ?? 0);
+        }
+      });
     }
-  }, []);
+    return;
+  }
+
+  setDuration(duration);
+
+  if (pendingPos) {
+    safeSeek(pendingPos);
+    return;
+  }
+
+  // 片头跳过
+  const skipIntro = usePlayerStore.getState().currentPlaylist?.skipIntro || 0;
+  if (skipIntro > 0 && audio.currentTime < skipIntro) {
+    audio.currentTime = skipIntro;
+  }
+}, [setDuration, currentTrack]);
 
   // 快切评分逻辑
   const handlePreviousOrNext = useCallback(async (direction: 'prev' | 'next') => {
@@ -456,7 +495,6 @@ export function PlayerBar() {
             onPause={handlePause}
             onEnded={handleEnded}
             onLoadedMetaData={handleLoadedMetadata}
-            onCanPlay={handleCanPlay}
             volume={volume / 100}
             layout="stacked"
             style={{ backgroundColor: 'transparent', boxShadow: 'none' }}
@@ -506,7 +544,6 @@ export function PlayerBar() {
             onPause={handlePause}
             onEnded={handleEnded}
             onLoadedMetaData={handleLoadedMetadata}
-            onCanPlay={handleCanPlay}
             volume={volume / 100}
             style={{ backgroundColor: 'transparent', boxShadow: 'none' }}
           />
