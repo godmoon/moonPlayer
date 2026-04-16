@@ -39,7 +39,7 @@ function initDatabase(db: Database.Database) {
       artist TEXT,
       album TEXT,
       year INTEGER,
-      genre TEXT,
+      tags TEXT,
       duration REAL,
       rating INTEGER DEFAULT 0,
       play_count INTEGER DEFAULT 0,
@@ -138,26 +138,6 @@ function initDatabase(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_skip_history_track ON skip_history(track_id);
   `);
 
-  // 音轨缓存表（存储完整元数据）
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS track_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      path TEXT UNIQUE NOT NULL,
-      title TEXT NOT NULL,
-      artist TEXT,
-      album TEXT,
-      year INTEGER,
-      genre TEXT,
-      duration REAL,
-      rating INTEGER DEFAULT 0,
-      play_count INTEGER DEFAULT 0,
-      file_name TEXT,
-      file_ext TEXT,
-      cached_at INTEGER NOT NULL
-    )
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_track_cache_path ON track_cache(path)`);
-
   // 创建 WebDAV 配置表
   db.exec(`
     CREATE TABLE IF NOT EXISTS webdav_configs (
@@ -241,15 +221,6 @@ function initDatabase(db: Database.Database) {
 
 // 数据库迁移（新增字段）
 function migrateDatabase(db: Database.Database) {
-  // 检查并添加 track_cache 表的 tags 字段
-  const cacheInfo = db.prepare('PRAGMA table_info(track_cache)').all() as { name: string }[];
-  const cacheColumns = cacheInfo.map(c => c.name);
-
-  if (!cacheColumns.includes('tags')) {
-    db.exec('ALTER TABLE track_cache ADD COLUMN tags TEXT');
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_track_cache_tags ON track_cache(tags)`);
-  }
-
   // 检查并添加 playlists 表的新字段
   const playlistsInfo = db.prepare('PRAGMA table_info(playlists)').all() as { name: string }[];
   const playlistsColumns = playlistsInfo.map(c => c.name);
@@ -282,7 +253,7 @@ function migrateDatabase(db: Database.Database) {
   }
   // 匹配类型播放列表新字段
   if (!itemsColumns.includes('match_field')) {
-    db.exec('ALTER TABLE playlist_items ADD COLUMN match_field TEXT'); // rating, duration, year, artist, filename, genre
+    db.exec('ALTER TABLE playlist_items ADD COLUMN match_field TEXT'); // rating, duration, year, artist, filename, tags
   }
   if (!itemsColumns.includes('match_op')) {
     db.exec('ALTER TABLE playlist_items ADD COLUMN match_op TEXT'); // >, <, >=, <=, =, contains, not_contains
@@ -315,8 +286,8 @@ function migrateDatabase(db: Database.Database) {
   if (!tracksColumns.includes('year')) {
     db.exec('ALTER TABLE tracks ADD COLUMN year INTEGER');
   }
-  if (!tracksColumns.includes('genre')) {
-    db.exec('ALTER TABLE tracks ADD COLUMN genre TEXT');
+  if (!tracksColumns.includes('tags')) {
+    db.exec('ALTER TABLE tracks ADD COLUMN tags TEXT');
   }
 }
 

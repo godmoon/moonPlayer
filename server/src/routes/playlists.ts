@@ -299,8 +299,8 @@ export async function playlistRoutes(app: FastifyInstance) {
                   
                   // 匹配类型过滤
                   if (match && matchField && matchOp && matchValue !== null) {
-                    // 查询 track_cache 获取元数据
-                    const cached = db.prepare('SELECT * FROM track_cache WHERE path = ?').get(filePath) as any;
+                    // 查询 tracks 获取元数据
+                    const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
                     
                     if (cached) {
                       const fieldValue = cached[matchField];
@@ -327,20 +327,20 @@ export async function playlistRoutes(app: FastifyInstance) {
                           match = String(fieldValue || '') === String(matchValue);
                           break;
                         case 'contains':
-                          if (matchField === 'genre') {
+                          if (matchField === 'tags') {
                             try {
-                              const genres = cached.genre ? JSON.parse(cached.genre) : [];
-                              match = genres.some((g: string) => g.includes(matchValue));
+                              const tags = cached.tags ? JSON.parse(cached.tags) : [];
+                              match = tags.some((t: string) => t.includes(matchValue));
                             } catch { match = false; }
                           } else {
                             match = String(fieldValue || '').includes(matchValue);
                           }
                           break;
                         case 'not_contains':
-                          if (matchField === 'genre') {
+                          if (matchField === 'tags') {
                             try {
-                              const genres = cached.genre ? JSON.parse(cached.genre) : [];
-                              match = !genres.some((g: string) => g.includes(matchValue));
+                              const tags = cached.tags ? JSON.parse(cached.tags) : [];
+                              match = !tags.some((t: string) => t.includes(matchValue));
                             } catch { match = true; }
                           } else {
                             match = !String(fieldValue || '').includes(matchValue);

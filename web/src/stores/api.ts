@@ -273,7 +273,7 @@ export interface TrackCache {
   album: string | null;
   year: number | null;
   rating: number;
-  genre: string | null;
+  tags: string[];
 }
 
 export async function getAllTracksCache(): Promise<TrackCache[]> {
@@ -292,14 +292,12 @@ export async function importAIPlaylists(data: AIPlaylist[]): Promise<{ created: 
   return res.data;
 }
 
-// ========== 风格列表 ==========
-
-export async function getGenres(): Promise<string[]> {
-  const res = await api.get('/tracks/genres');
-  return res.data.genres;
-}
-
 // ========== 标签 ==========
+
+export async function getTags(): Promise<string[]> {
+  const res = await api.get('/tracks/tags/list');
+  return res.data.tags;
+}
 
 export interface UntaggedTrack {
   id: number;
@@ -308,7 +306,6 @@ export interface UntaggedTrack {
   artist: string | null;
   album: string | null;
   year: number | null;
-  genre: string | null;
 }
 
 export async function getUntaggedCount(): Promise<number> {

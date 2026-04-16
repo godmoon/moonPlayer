@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getRecentPlaylists, deletePlaylistHistory, refreshPlaylist, recordHistory } from '../stores/api';
 import { usePlayerStore } from '../stores/playerStore';
-import { setPendingSeekPosition } from './AudioPlayer';
+import { setPendingSeekPosition } from './AudioPlayer/PlayerBar';
 import type { Track, Playlist } from '../stores/playerStore';
 
 interface HistoryItem {

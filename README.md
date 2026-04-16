@@ -1,6 +1,6 @@
 # moonPlayer 🎵
 
-Web 端音乐播放器，支持多种播放模式和评分系统。
+Web 端音乐播放器，支持多种播放模式、评分系统、WebDAV 远程存储和有声书功能。
 
 ## 功能特性
 
@@ -10,6 +10,7 @@ Web 端音乐播放器，支持多种播放模式和评分系统。
 - ✅ 跳转功能：递增跳转（5→10→30→60→120秒）
 - ✅ 硬件快捷键：支持键盘媒体键和系统控制中心
 - ✅ 删除并播放下一曲
+- ✅ 睡眠定时：一次性定时 / 重复定时
 
 ### 播放列表
 
@@ -17,6 +18,16 @@ Web 端音乐播放器，支持多种播放模式和评分系统。
 - ✅ 播放列表管理：创建、编辑、删除
 - ✅ 目录播放：扫描整个目录并播放
 - ✅ 播放列表属性：默认播放模式、片头片尾跳过设置
+- ✅ 匹配类型播放列表：按评分、年份、演唱者、专辑、标签筛选
+- ✅ 播放列表排序：名称、序号、随机
+- ✅ 音轨排序：名称、序号（数字开头）、随机、评分
+- ✅ 上次播放高亮：自动滚动到上次播放位置
+
+### AI 标签功能
+
+- ✅ 批量标注歌曲标签（1-30个标签）
+- ✅ 与外部 AI 配合：生成提示词 → AI 返回 → 导入标签
+- ✅ 支持自定义每批处理数量
 
 ### 评分系统
 
@@ -30,17 +41,32 @@ Web 端音乐播放器，支持多种播放模式和评分系统。
 - ✅ 片头跳过：手动设置或自动学习
 - ✅ 片尾跳过：自动检测并跳过
 - ✅ 继续播放：从上次位置恢复
-
-### 历史记录
-
-- ✅ 最近播放列表
-- ✅ 一键继续播放
+- ✅ 历史记录：最近播放列表，一键继续播放
 
 ### WebDAV 支持
 
 - ✅ 连接远程存储
 - ✅ 浏览远程目录
 - ✅ 流式播放远程文件
+- ✅ 支持 Range 请求（进度条可拖动）
+
+### 鉴权系统
+
+- ✅ 管理员账户
+- ✅ 登录/登出
+- ✅ 密码修改
+- ✅ 防暴力破解（失败次数递增等待时间）
+- ✅ 命令行清除密码工具
+
+### 导航排序
+
+- ✅ 左侧导航栏支持拖拽排序
+- ✅ 默认打开排第一的导航
+
+### 格式支持
+
+- ✅ FLAC/WMA/APE/WAV/AAC 自动转码为 MP3
+- ✅ 转码缓存，后续播放直接使用缓存
 
 ## 技术栈
 
@@ -54,38 +80,32 @@ Web 端音乐播放器，支持多种播放模式和评分系统。
 moonPlayer/
 ├── server/                    # 后端服务
 │   ├── src/
-│   │   ├── index.ts          # 服务入口
-│   │   ├── routes/           # API 路由模块
+│   │   ├── index.ts          # 服务入口 + 鉴权中间件
+│   │   ├── cli.ts            # 命令行工具 (clear-admin)
+│   │   ├── routes/           # API 路由
+│   │   │   ├── auth.ts       # 鉴权路由
 │   │   │   ├── files.ts      # 文件浏览
 │   │   │   ├── stream.ts     # 音频流传输
 │   │   │   ├── playlists.ts  # 播放列表管理
-│   │   │   ├── tracks.ts     # 音轨管理
+│   │   │   ├── tracks.ts     # 音轨管理 + AI 标签
 │   │   │   ├── history.ts    # 播放历史
 │   │   │   ├── skip.ts       # 片头片尾跳过
-│   │   │   └── webdav.ts     # WebDAV 支持
-│   │   ├── db/
-│   │   │   └── schema.ts     # 数据库 Schema
-│   │   └── utils/
-│   │       └── path.ts       # 路径工具
-│   ├── package.json
-│   ├── tsconfig.json
+│   │   │   ├── webdav.ts     # WebDAV 支持
+│   │   │   └── settings.ts   # 导航排序设置
+│   │   └── db/
+│   │       └── schema.ts     # 数据库 Schema
 │   └── ecosystem.config.json # PM2 配置
 │
 ├── web/                       # 前端应用
-│   ├── src/
-│   │   ├── components/       # UI 组件
-│   │   ├── stores/           # Zustand 状态
-│   │   └── App.tsx
-│   ├── package.json
-│   └── vite.config.ts
+│   └── src/
+│       ├── components/        # UI 组件
+│       │   ├── PlaylistManager/  # 播放列表管理
+│       │   ├── FileBrowser/      # 文件浏览器
+│       │   ├── AudioPlayer/      # 播放器
+│       │   └── ...
+│       └── stores/           # Zustand 状态
 │
-├── shared/                    # 共享类型定义
-│   └── types.ts
-│
-├── README.md                  # 本文件
-├── DEPLOY.md                  # 部署说明（简版）
-├── TASKS.md                   # 开发任务记录
-└── TODO.md                    # 待办事项
+└── README.md
 ```
 
 ## 快速开始
@@ -93,10 +113,7 @@ moonPlayer/
 ### 安装依赖
 
 ```bash
-# 后端
 cd server && npm install
-
-# 前端
 cd ../web && npm install && npm run build
 ```
 
@@ -113,15 +130,10 @@ cd web && npm run dev
 ### 生产部署
 
 ```bash
-# 构建前端
 cd web && npm run build
-
-# 启动后端（PM2）
 cd ../server
 mkdir -p ~/.moonplayer/logs
 pm2 start ecosystem.config.json
-
-# 开机自启
 pm2 startup && pm2 save
 ```
 
@@ -146,10 +158,7 @@ pm2 startup && pm2 save
 
 ### 音乐目录
 
-默认：`/mnt/music/`
-
 ```bash
-# 设置多个音乐目录
 curl -X POST http://localhost:3000/api/music-paths \
   -H "Content-Type: application/json" \
   -d '{"paths": ["/mnt/music/", "/mnt/audiobooks/"]}'
@@ -159,63 +168,57 @@ curl -X POST http://localhost:3000/api/music-paths \
 
 - 数据库：`~/.moonplayer/moonplayer.db`
 - 日志：`~/.moonplayer/logs/`
+- WebDAV 缓存：`~/.moonplayer/webdav_cache/`
+- 转码缓存：`~/.moonplayer/transcode_cache/`
+
+## 命令行工具
+
+```bash
+cd server
+npm run cli clear-admin    # 清除管理员密码
+```
 
 ## API 概览
 
+### 鉴权
+
+- `GET /api/auth/status` - 检查是否需要初始化
+- `POST /api/auth/setup` - 初始化管理员
+- `POST /api/auth/login` - 登录
+- `POST /api/auth/logout` - 登出
+- `GET /api/auth/check` - 检查登录状态
+- `POST /api/auth/change-password` - 修改密码
+
 ### 文件浏览
 
-```
-GET  /api/roots            # 获取音乐根目录列表
-GET  /api/browse?dir=      # 浏览目录
-GET  /api/scan?dir=        # 扫描目录音轨
-GET  /api/music-paths      # 获取/设置音乐目录
-POST /api/music-paths
-```
+- `GET /api/roots` - 获取音乐根目录列表
+- `GET /api/browse?dir=` - 浏览目录
+- `GET /api/music-paths` - 获取/设置音乐目录
 
 ### 播放列表
 
-```
-GET    /api/playlists              # 获取所有播放列表
-POST   /api/playlists              # 创建播放列表
-PUT    /api/playlists/:id          # 更新播放列表
-DELETE /api/playlists/:id          # 删除播放列表
-POST   /api/playlists/:id/refresh  # 刷新音轨列表
-GET    /api/playlists/:id/tracks   # 获取音轨列表
-```
+- `GET/POST /api/playlists` - 播放列表 CRUD
+- `POST /api/playlists/:id/refresh` - 刷新音轨列表
 
 ### 音轨
 
-```
-GET  /api/stream/:id          # 流式播放
-GET  /api/stream-path?path=   # 直接路径播放
-POST /api/tracks/scan         # 扫描并添加音轨
-PUT  /api/tracks/:id/rating   # 更新评分
-POST /api/tracks/:id/play     # 记录播放
-GET  /api/tracks/search?q=    # 搜索音轨
-```
+- `GET /api/stream/:id` - 流式播放
+- `PUT /api/tracks/:id/rating` - 更新评分
+- `POST /api/tracks/:id/play` - 记录播放
+- `GET /api/tracks/untagged-count` - 未标注歌曲数量
+- `GET /api/tracks/untagged` - 未标注歌曲列表
+- `POST /api/tracks/tags/import` - 导入标签
 
-### 播放历史
+### 历史记录
 
-```
-GET  /api/history/playlists      # 最近播放的播放列表
-GET  /api/history/playlist/:id   # 播放列表历史位置
-POST /api/history                # 记录历史
-```
+- `GET /api/history/playlists` - 最近播放列表
 
 ### WebDAV
 
-```
-GET    /api/webdav             # 获取所有配置
-POST   /api/webdav             # 添加配置
-GET    /api/webdav/:id/browse  # 浏览目录
-GET    /api/webdav/:id/stream  # 流式播放
-```
-
-### 健康检查
-
-```
-GET /api/health
-```
+- `GET /api/webdav` - 获取配置列表
+- `POST /api/webdav` - 添加配置
+- `GET /api/webdav/:id/browse` - 浏览目录
+- `GET /api/webdav/:id/stream` - 流式播放
 
 ## 播放模式
 
@@ -232,43 +235,6 @@ GET /api/health
 - **完整听完**：+1 分
 - **快切（<10%）**：-1 分
 - **手工评分**：👍👎按钮调整
-
-## 完整部署流程（新机器）
-
-```bash
-# 1. 安装后端依赖
-cd /path/to/moonPlayer/server
-npm install
-
-# 2. 构建前端，在修改代码后需要执行build
-cd ../web
-npm install
-npm run build
-
-# 3. 创建日志目录
-mkdir -p ~/.moonplayer/logs
-
-# 4. 启动服务
-cd ../server
-pm2 start ecosystem.config.json
-
-# 5. 开机自启（可选）
-pm2 startup
-pm2 save
-
-# 6. 检查服务
-pm2 status
-curl http://localhost:3000/api/health
-
-# 7. 配置音乐目录
-curl -X POST http://localhost:3000/api/music-paths \
-  -H "Content-Type: application/json" \
-  -d '{"paths": ["/path/to/music"]}'
-
-# 8. 重启服务
-pm2 restart moonplayer-server
-
-```
 
 ## 故障排查
 

@@ -271,10 +271,9 @@ export async function trackRoutes(app: FastifyInstance) {
   // 元数据缓存相关 API
   // =====================
 
-  // 获取所有歌曲的缓存数据（用于导出给AI）
+  // 获取所有歌曲数据（用于导出给AI）
   app.get('/api/tracks/cache', async (req, reply) => {
-    // 从 track_cache 获取
-    const cachedTracks = db.prepare(`
+    const tracks = db.prepare(`
       SELECT 
         id,
         path,
@@ -282,59 +281,23 @@ export async function trackRoutes(app: FastifyInstance) {
         artist,
         album,
         year,
-        genre,
+        tags,
         rating,
-        play_count,
-        file_name
-      FROM track_cache
-      ORDER BY title
-    `).all() as any[];
-
-    // 从 tracks 表获取所有路径
-    const allTracks = db.prepare(`
-      SELECT 
-        id,
-        path,
-        title,
-        artist,
-        album,
-        year,
-        genre,
-        rating,
-        play_count,
-        path as file_name
+        play_count
       FROM tracks
       ORDER BY title
     `).all() as any[];
 
-    // 合并：以 path 为 key，缓存优先（有更多元数据）
-    const trackMap = new Map<string, any>();
-    
-    // 先添加所有 tracks
-    for (const track of allTracks) {
-      trackMap.set(track.path, track);
-    }
-    
-    // 用缓存数据覆盖（缓存有更完整的元数据）
-    for (const cached of cachedTracks) {
-      trackMap.set(cached.path, {
-        ...trackMap.get(cached.path),
-        ...cached,
-        // 合并 genre：优先用缓存的，但没有则用 tracks 表的
-        genre: cached.genre || trackMap.get(cached.path)?.genre || null
-      });
-    }
-
-    // 转换为数组并解析 genre
-    const result = Array.from(trackMap.values()).map((t: any) => ({
+    // 解析 tags
+    const result = tracks.map((t: any) => ({
       ...t,
-      genre: t.genre ? (typeof t.genre === 'string' ? JSON.parse(t.genre) : t.genre) : []
+      tags: t.tags ? (typeof t.tags === 'string' ? JSON.parse(t.tags) : t.tags) : []
     }));
 
     return { tracks: result };
   });
 
-  // 刷新缓存（扫描所有音乐路径）
+  // 刷新元数据（扫描所有音乐路径）
   app.post('/api/tracks/cache/refresh', async (req, reply) => {
     // 获取音乐路径配置
     const setting = db.prepare("SELECT value FROM settings WHERE key = 'music_paths'").get() as { value: string } | undefined;
@@ -379,40 +342,31 @@ export async function trackRoutes(app: FastifyInstance) {
             // 解析元数据
             const metadata = await parseFile(fullPath, { duration: false });
             const fileName = path.basename(fullPath, ext);
-            const fileExt = ext.substring(1);
 
             const title = metadata.common.title || fileName;
             const artist = metadata.common.artist || undefined;
             const album = metadata.common.album || undefined;
             const year = metadata.common.year || undefined;
-            const genre = metadata.common.genre ? JSON.stringify(metadata.common.genre) : null;
-            // duration 暂不获取（太慢）
 
-            // 从现有 tracks 表获取 rating 和 play_count
-            const existingTrack = db.prepare('SELECT rating, play_count FROM tracks WHERE path = ?').get(fullPath) as { rating: number; play_count: number } | undefined;
-
-            // 检查缓存是否已存在
-            const existing = db.prepare('SELECT id FROM track_cache WHERE path = ?').get(fullPath);
+            // 检查是否已存在
+            const existing = db.prepare('SELECT id FROM tracks WHERE path = ?').get(fullPath);
 
             if (existing) {
-              // 更新
+              // 更新元数据，保留 rating/play_count/tags
               db.prepare(`
-                UPDATE track_cache 
-                SET title = ?, artist = ?, album = ?, year = ?, genre = ?, 
-                    file_name = ?, file_ext = ?, cached_at = ?
+                UPDATE tracks 
+                SET title = ?, artist = ?, album = ?, year = ?
                 WHERE path = ?
-              `).run(title, artist || null, album || null, year || null, genre, fileName, fileExt, Date.now(), fullPath);
+              `).run(title, artist || null, album || null, year || null, fullPath);
               stats.updated++;
             } else {
-              // 插入
+              // 插入新记录
               db.prepare(`
-                INSERT INTO track_cache 
-                (path, title, artist, album, year, genre, duration, rating, play_count, file_name, file_ext, cached_at)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+                INSERT INTO tracks 
+                (path, title, artist, album, year, tags, duration, rating, play_count, skip_count, date_added)
+                VALUES (?, ?, ?, ?, ?, NULL, NULL, 0, 0, 0, ?)
               `).run(
-                fullPath, title, artist || null, album || null, year || null, genre,
-                existingTrack?.rating || 0, existingTrack?.play_count || 0,
-                fileName, fileExt, Date.now()
+                fullPath, title, artist || null, album || null, year || null, Date.now()
               );
               stats.inserted++;
             }
@@ -455,31 +409,23 @@ export async function trackRoutes(app: FastifyInstance) {
                 stats.scanned++;
                 const webdavPath = `webdav://${config.id}${entry.filename}`;
                 const fileName = path.basename(entry.basename, ext);
-                const fileExt = ext.substring(1);
 
-                // 从现有 tracks 表获取 rating 和 play_count
-                const existingTrack = db.prepare('SELECT rating, play_count FROM tracks WHERE path = ?').get(webdavPath) as { rating: number; play_count: number } | undefined;
-
-                // 检查缓存是否已存在
-                const existing = db.prepare('SELECT id FROM track_cache WHERE path = ?').get(webdavPath);
+                // 检查是否已存在
+                const existing = db.prepare('SELECT id FROM tracks WHERE path = ?').get(webdavPath);
 
                 if (existing) {
                   db.prepare(`
-                    UPDATE track_cache 
-                    SET title = ?, file_name = ?, file_ext = ?, cached_at = ?
+                    UPDATE tracks 
+                    SET title = ?
                     WHERE path = ?
-                  `).run(fileName, fileName, fileExt, Date.now(), webdavPath);
+                  `).run(fileName, webdavPath);
                   stats.updated++;
                 } else {
                   db.prepare(`
-                    INSERT INTO track_cache 
-                    (path, title, artist, album, year, genre, duration, rating, play_count, file_name, file_ext, cached_at)
-                    VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)
-                  `).run(
-                    webdavPath, fileName,
-                    existingTrack?.rating || 0, existingTrack?.play_count || 0,
-                    fileName, fileExt, Date.now()
-                  );
+                    INSERT INTO tracks 
+                    (path, title, artist, album, year, tags, duration, rating, play_count, skip_count, date_added)
+                    VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, 0, 0, 0, ?)
+                  `).run(webdavPath, fileName, Date.now());
                   stats.inserted++;
                 }
               }
@@ -501,72 +447,16 @@ export async function trackRoutes(app: FastifyInstance) {
     };
   });
 
-  // 导入歌曲风格数据
-  app.post('/api/tracks/cache/import-genre', async (req, reply) => {
-    const { genres } = req.body as { genres: Array<{ path: string; genre: string[] }> };
-
-    if (!genres || !Array.isArray(genres)) {
-      return reply.code(400).send({ error: '缺少风格数据' });
-    }
-
-    const updateStmt = db.prepare('UPDATE track_cache SET genre = ? WHERE path = ?');
-    const updateTracksStmt = db.prepare('UPDATE tracks SET genre = ? WHERE path = ?');
-
-    let updated = 0;
-    for (const item of genres) {
-      const genreJson = JSON.stringify(item.genre);
-      const result = updateStmt.run(genreJson, item.path);
-      if (result.changes > 0) updated++;
-
-      // 同步更新 tracks 表
-      updateTracksStmt.run(genreJson, item.path);
-    }
-
-    return { success: true, updated };
-  });
-
-  // 获取所有已存在的风格列表
-  app.get('/api/tracks/genres', async (req, reply) => {
-    const rows = db.prepare('SELECT DISTINCT genre FROM track_cache WHERE genre IS NOT NULL AND genre != "[]"').all() as { genre: string }[];
-    
-    const genreSet = new Set<string>();
-    for (const row of rows) {
-      try {
-        const genres = JSON.parse(row.genre);
-        if (Array.isArray(genres)) {
-          genres.forEach(g => {
-            if (g && typeof g === 'string') genreSet.add(g);
-          });
-        }
-      } catch {
-        // 忽略解析错误
-      }
-    }
-    
-    const genres = Array.from(genreSet).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-    return { genres };
-  });
-
   // =====================
   // 标签相关 API
   // =====================
 
   // 获取未标注标签的歌曲数量
   app.get('/api/tracks/untagged-count', async (req, reply) => {
-    // 先检查 track_cache 有没有数据
-    const cacheCount = db.prepare('SELECT COUNT(*) as count FROM track_cache').get() as { count: number };
-    
-    if (cacheCount.count > 0) {
-      // 从 track_cache 获取未标注数量
-      const result = db.prepare(`
-        SELECT COUNT(*) as count FROM track_cache 
-        WHERE tags IS NULL OR tags = '' OR tags = '[]'
-      `).get() as { count: number };
-      return { count: result.count };
-    }
-    
-    // track_cache 为空，从 tracks 表获取所有歌曲数量
-    const result = db.prepare('SELECT COUNT(*) as count FROM tracks').get() as { count: number };
+    const result = db.prepare(`
+      SELECT COUNT(*) as count FROM tracks 
+      WHERE tags IS NULL OR tags = '' OR tags = '[]'
+    `).get() as { count: number };
     return { count: result.count };
   });
 
@@ -574,29 +464,6 @@ export async function trackRoutes(app: FastifyInstance) {
   app.get('/api/tracks/untagged', async (req, reply) => {
     const { limit = 500, offset = 0 } = req.query as { limit?: string; offset?: string };
     
-    // 先检查 track_cache 有没有数据
-    const cacheCount = db.prepare('SELECT COUNT(*) as count FROM track_cache').get() as { count: number };
-    
-    if (cacheCount.count > 0) {
-      // 从 track_cache 获取未标注歌曲
-      const tracks = db.prepare(`
-        SELECT 
-          id,
-          path,
-          title,
-          artist,
-          album,
-          year,
-          genre
-        FROM track_cache 
-        WHERE tags IS NULL OR tags = '' OR tags = '[]'
-        ORDER BY title
-        LIMIT ? OFFSET ?
-      `).all(Number(limit), Number(offset)) as any[];
-      return { tracks };
-    }
-    
-    // track_cache 为空，从 tracks 表获取所有歌曲
     const tracks = db.prepare(`
       SELECT 
         id,
@@ -604,9 +471,9 @@ export async function trackRoutes(app: FastifyInstance) {
         title,
         artist,
         album,
-        year,
-        genre
+        year
       FROM tracks 
+      WHERE tags IS NULL OR tags = '' OR tags = '[]'
       ORDER BY title
       LIMIT ? OFFSET ?
     `).all(Number(limit), Number(offset)) as any[];
@@ -622,9 +489,9 @@ export async function trackRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: '缺少标签数据' });
     }
 
-    const updateStmt = db.prepare('UPDATE track_cache SET tags = ? WHERE id = ?');
-
+    const updateStmt = db.prepare('UPDATE tracks SET tags = ? WHERE id = ?');
     let updated = 0;
+
     for (const item of tags) {
       const tagsJson = JSON.stringify(item.tags);
       const result = updateStmt.run(tagsJson, item.id);
@@ -636,7 +503,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取所有已存在的标签列表
   app.get('/api/tracks/tags/list', async (req, reply) => {
-    const rows = db.prepare('SELECT DISTINCT tags FROM track_cache WHERE tags IS NOT NULL AND tags != "[]"').all() as { tags: string }[];
+    const rows = db.prepare('SELECT DISTINCT tags FROM tracks WHERE tags IS NOT NULL AND tags != \'[]\'').all() as { tags: string }[];
     
     const tagSet = new Set<string>();
     for (const row of rows) {

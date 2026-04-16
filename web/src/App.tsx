@@ -1,7 +1,7 @@
 // moonPlayer 主应用
 import { useState, useEffect } from 'react';
 import { Sidebar, Tab } from './components/Sidebar';
-import { FileBrowser } from './components/FileBrowser';
+import { FileBrowser } from './components/FileBrowser/FileBrowser';
 import { PlaylistManager, PlaylistDetail } from './components/PlaylistManager';
 import { Settings } from './components/Settings';
 import { PlayerBar } from './components/AudioPlayer';
@@ -120,7 +120,7 @@ function App() {
         {/* 内容区：手机端自动留出播放器空间 */}
         <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain pb-[120px] md:pb-0">
           {activeTab === 'browse' && (
-            <FileBrowser onPlay={handlePlay} onAddToPlaylist={() => {}} />
+            <FileBrowser onPlay={handlePlay} />
           )}
 
           {activeTab === 'playlists' && (
