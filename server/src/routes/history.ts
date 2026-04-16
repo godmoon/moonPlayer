@@ -31,7 +31,8 @@ export async function historyRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
 
     const history = db.prepare(`
-      SELECT ph.*, t.path, t.title, t.artist, t.album, t.duration
+      SELECT ph.playlist_id, ph.track_id as id, ph.position, ph.timestamp,
+             t.path, t.title, t.artist, t.album, t.duration
       FROM play_history ph
       JOIN tracks t ON ph.track_id = t.id
       WHERE ph.playlist_id = ?

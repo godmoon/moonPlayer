@@ -1,6 +1,16 @@
 // 播放器状态管理
 import { create } from 'zustand';
 
+// 睡眠定时模式
+export type SleepTimerMode = 'off' | 'once' | 'repeat';
+
+interface SleepTimerState {
+  mode: SleepTimerMode;
+  minutes: number;
+  endTime: number | null;  // 结束时间的毫秒时间戳
+  remainingMinutes: number; // 剩余分钟数（用于显示）
+}
+
 type PlayMode = 'sequential' | 'shuffle' | 'weighted' | 'random' | 'single-loop';
 
 interface Track {
@@ -46,6 +56,9 @@ interface PlayerState {
   // 播放模式
   playMode: PlayMode;
 
+  // 睡眠定时
+  sleepTimer: SleepTimerState;
+
   // 乱序队列（用于 random 模式）
   shuffleQueue: number[];
   shuffleIndex: number;
@@ -60,6 +73,11 @@ interface PlayerState {
   setPlayMode: (mode: PlayMode) => void;
   setPendingSeekPosition: (position: number | null) => void;
   clearPendingSeekPosition: () => void;
+
+  // 睡眠定时控制
+  setSleepTimer: (mode: SleepTimerMode, minutes: number) => void;
+  clearSleepTimer: () => void;
+  tickSleepTimer: () => void; // 每分钟调用一次，更新剩余时间
 
   // 播放控制
   playNext: () => void;
@@ -89,6 +107,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playMode: 'sequential',
   shuffleQueue: [],
   shuffleIndex: 0,
+  sleepTimer: {
+    mode: 'off' as SleepTimerMode,
+    minutes: 0,
+    endTime: null,
+    remainingMinutes: 0
+  },
 
   // 👇 新增
   lastPlayedPositions: {},
@@ -136,6 +160,80 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   setPendingSeekPosition: (position) => set({ pendingSeekPosition: position }),
   clearPendingSeekPosition: () => set({ pendingSeekPosition: null }),
+
+  // 睡眠定时控制
+  setSleepTimer: (mode, minutes) => {
+    const now = Date.now();
+    const endTime = mode !== 'off' ? now + minutes * 60 * 1000 : null;
+    set({
+      sleepTimer: {
+        mode,
+        minutes,
+        endTime,
+        remainingMinutes: mode !== 'off' ? minutes : 0
+      }
+    });
+  },
+
+  clearSleepTimer: () => {
+    set({
+      sleepTimer: {
+        mode: 'off',
+        minutes: 0,
+        endTime: null,
+        remainingMinutes: 0
+      }
+    });
+  },
+
+  tickSleepTimer: () => {
+    const state = get();
+    const { sleepTimer, isPlaying } = state;
+    
+    if (sleepTimer.mode === 'off' || !sleepTimer.endTime) return;
+    
+    const now = Date.now();
+    const remaining = Math.max(0, Math.ceil((sleepTimer.endTime - now) / 60000));
+    
+    // 时间到了
+    if (remaining <= 0 && isPlaying) {
+      // 停止播放
+      set({ isPlaying: false });
+      
+      // 如果是 repeat 模式，重置定时器
+      if (sleepTimer.mode === 'repeat') {
+        const newEndTime = Date.now() + sleepTimer.minutes * 60 * 1000;
+        set({
+          sleepTimer: {
+            ...sleepTimer,
+            endTime: newEndTime,
+            remainingMinutes: sleepTimer.minutes
+          }
+        });
+      } else {
+        // 一次性模式，关闭定时器
+        set({
+          sleepTimer: {
+            mode: 'off',
+            minutes: 0,
+            endTime: null,
+            remainingMinutes: 0
+          }
+        });
+      }
+      return;
+    }
+    
+    // 更新剩余时间
+    if (remaining !== sleepTimer.remainingMinutes) {
+      set({
+        sleepTimer: {
+          ...sleepTimer,
+          remainingMinutes: remaining
+        }
+      });
+    }
+  },
 
   playNext: () => {
     const state = get();

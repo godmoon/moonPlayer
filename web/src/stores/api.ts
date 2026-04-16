@@ -67,7 +67,7 @@ export async function addPlaylistItem(playlistId: number, type: 'directory' | 'f
   return res.data;
 }
 
-export async function updatePlaylistItem(playlistId: number, itemId: number, data: { includeSubdirs?: boolean; filterRegex?: string }): Promise<void> {
+export async function updatePlaylistItem(playlistId: number, itemId: number, data: { includeSubdirs?: boolean; filterRegex?: string; matchField?: string; matchOp?: string; matchValue?: string }): Promise<void> {
   await api.put(`/playlists/${playlistId}/items/${itemId}`, data);
 }
 
@@ -262,4 +262,76 @@ export async function getNavOrder(): Promise<string[]> {
 
 export async function setNavOrder(order: string[]): Promise<void> {
   await api.put('/settings/nav-order', { order });
+}
+
+// ========== AI 播放列表 ==========
+
+export interface TrackCache {
+  id: number;
+  path: string;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  rating: number;
+  genre: string | null;
+}
+
+export async function getAllTracksCache(): Promise<TrackCache[]> {
+  const res = await api.get('/tracks/cache');
+  return res.data.tracks;
+}
+
+export interface AIPlaylist {
+  name: string;
+  description?: string;
+  tracks: string[]; // 文件路径列表
+}
+
+export async function importAIPlaylists(data: AIPlaylist[]): Promise<{ created: number; playlists: any[] }> {
+  const res = await api.post('/playlists/import-ai', { playlists: data });
+  return res.data;
+}
+
+// ========== 风格列表 ==========
+
+export async function getGenres(): Promise<string[]> {
+  const res = await api.get('/tracks/genres');
+  return res.data.genres;
+}
+
+// ========== 标签 ==========
+
+export interface UntaggedTrack {
+  id: number;
+  path: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  genre: string | null;
+}
+
+export async function getUntaggedCount(): Promise<number> {
+  const res = await api.get('/tracks/untagged-count');
+  return res.data.count;
+}
+
+export async function getUntaggedTracks(limit = 500, offset = 0): Promise<UntaggedTrack[]> {
+  const res = await api.get('/tracks/untagged', { params: { limit, offset } });
+  return res.data.tracks;
+}
+
+export interface TagImport {
+  id: number;
+  tags: string[];
+}
+
+export async function importTags(tags: TagImport[]): Promise<{ updated: number }> {
+  const res = await api.post('/tracks/tags/import', { tags });
+  return res.data;
+}
+
+export async function getAllTags(): Promise<string[]> {
+  const res = await api.get('/tracks/tags/list');
+  return res.data.tags;
 }

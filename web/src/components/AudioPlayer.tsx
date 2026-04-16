@@ -2,7 +2,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import AudioPlayer from 'react-h5-audio-player';
 import 'react-h5-audio-player/lib/styles.css';
-import { usePlayerStore } from '../stores/playerStore';
+import { usePlayerStore, SleepTimerMode } from '../stores/playerStore';
 import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory } from '../stores/api';
 import { getDuration } from '../stores/api';
 import { AddToPlaylistModal } from './AddToPlaylistModal';
@@ -46,6 +46,9 @@ const PLAY_MODE_LABELS: Record<PlayMode, { icon: string; label: string }> = {
 
 const SKIP_AMOUNTS = [5, 10, 30, 60, 120];
 
+// 睡眠定时器选项
+const SLEEP_TIMER_OPTIONS = [15, 30, 45, 60, 90, 120];
+
 export function PlayerBar() {
   const {
     currentTrack,
@@ -53,13 +56,17 @@ export function PlayerBar() {
     playMode,
     volume,
     currentPlaylist,
+    sleepTimer,
     setIsPlaying,
     setDuration,
     setPlayMode,
     playNext,
     playPrevious,
     deleteAndPlayNext,
-    updateTrackRating: updateRating
+    updateTrackRating: updateRating,
+    setSleepTimer,
+    clearSleepTimer,
+    tickSleepTimer
   } = usePlayerStore();
 
   const playerRef = useRef<any>(null);
@@ -67,6 +74,7 @@ export function PlayerBar() {
   const lastHistoryRecordRef = useRef<number>(0);
   const [skipAmounts, setSkipAmounts] = useState({ forward: 5, backward: 5 });
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showSleepModal, setShowSleepModal] = useState(false);
 
 // 🔥 现在全局只有一个播放器，统一用 playerRef
 const getAudio = useCallback(() => {
@@ -78,6 +86,17 @@ useEffect(() => {
   const audio = getAudio();
   if (audio) audio.volume = volume / 100;
 }, [volume, getAudio]);
+
+  // 睡眠定时器检查
+  useEffect(() => {
+    if (sleepTimer.mode === 'off') return;
+    
+    const interval = setInterval(() => {
+      tickSleepTimer();
+    }, 10000); // 每10秒检查一次
+    
+    return () => clearInterval(interval);
+  }, [sleepTimer.mode, tickSleepTimer]);
 
   // 流媒体地址
   const streamUrl = currentTrack ? 
@@ -313,6 +332,23 @@ useEffect(() => {
 
   const { icon: playModeIcon, label: playModeLabel } = PLAY_MODE_LABELS[playMode];
 
+  // 睡眠定时器显示
+  const sleepTimerDisplay = sleepTimer.mode !== 'off' 
+    ? `💤 ${sleepTimer.remainingMinutes}分`
+    : null;
+
+  // 设置睡眠定时器
+  const handleSetSleepTimer = useCallback((mode: SleepTimerMode, minutes: number) => {
+    setSleepTimer(mode, minutes);
+    setShowSleepModal(false);
+  }, [setSleepTimer]);
+
+  // 取消睡眠定时器
+  const handleClearSleepTimer = useCallback(() => {
+    clearSleepTimer();
+    setShowSleepModal(false);
+  }, [clearSleepTimer]);
+
   if (!currentTrack) {
     return <div className="fixed bottom-0 left-0 right-0 h-28 md:h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center text-gray-500">请选择音乐播放</div>;
   }
@@ -332,7 +368,7 @@ useEffect(() => {
       </div>
 
       {/* 按钮栏 */}
-      <div className="flex items-center gap-2 w-full">
+      <div className="flex items-center gap-2 w-full flex-wrap">
         <div className="flex items-center gap-1">
           <span className="text-gray-300 text-sm">评分: {currentTrack.rating}</span>
           <button onClick={() => updateRating(currentTrack.id, 1)} className="text-green-400">👍</button>
@@ -346,6 +382,15 @@ useEffect(() => {
         
         <button onClick={handleTogglePlayMode} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm" title={playModeLabel}>
           {playModeIcon} {playModeLabel.slice(0, 2)}
+        </button>
+
+        {/* 睡眠定时按钮 */}
+        <button 
+          onClick={() => setShowSleepModal(true)} 
+          className={`px-2 py-1 rounded text-sm ${sleepTimer.mode !== 'off' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600'}`}
+          title={sleepTimer.mode === 'once' ? `一次性定时 ${sleepTimer.minutes} 分钟` : sleepTimer.mode === 'repeat' ? `重复定时 ${sleepTimer.minutes} 分钟` : '睡眠定时'}
+        >
+          {sleepTimerDisplay || '💤'}
         </button>
       </div>
 
@@ -421,6 +466,72 @@ useEffect(() => {
 
     {showAddModal && currentTrack && (
       <AddToPlaylistModal trackPath={currentTrack.path} onClose={() => setShowAddModal(false)} />
+    )}
+
+    {/* 睡眠定时器弹窗 */}
+    {showSleepModal && (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowSleepModal(false)}>
+        <div className="bg-gray-800 rounded-lg p-4 w-80 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <h3 className="text-white text-lg font-medium mb-4">睡眠定时</h3>
+          
+          {sleepTimer.mode !== 'off' && (
+            <div className="mb-4 p-3 bg-blue-900/50 rounded border border-blue-700">
+              <div className="text-blue-300 text-sm">
+                当前: {sleepTimer.mode === 'once' ? '一次性' : '重复'}定时
+              </div>
+              <div className="text-white text-lg font-medium">
+                剩余 {sleepTimer.remainingMinutes} 分钟
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div className="text-gray-400 text-sm">一次性定时（到时间停止，不自动重启）</div>
+            <div className="flex flex-wrap gap-2">
+              {SLEEP_TIMER_OPTIONS.map(min => (
+                <button
+                  key={`once-${min}`}
+                  onClick={() => handleSetSleepTimer('once', min)}
+                  className={`px-3 py-2 rounded text-sm ${sleepTimer.mode === 'once' && sleepTimer.minutes === min ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                >
+                  {min}分钟
+                </button>
+              ))}
+            </div>
+
+            <div className="border-t border-gray-700 pt-3 mt-3">
+              <div className="text-gray-400 text-sm">重复定时（每次手动播放后重新计时）</div>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {SLEEP_TIMER_OPTIONS.map(min => (
+                  <button
+                    key={`repeat-${min}`}
+                    onClick={() => handleSetSleepTimer('repeat', min)}
+                    className={`px-3 py-2 rounded text-sm ${sleepTimer.mode === 'repeat' && sleepTimer.minutes === min ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                  >
+                    {min}分钟
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {sleepTimer.mode !== 'off' && (
+            <button
+              onClick={handleClearSleepTimer}
+              className="w-full mt-4 px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded"
+            >
+              取消定时
+            </button>
+          )}
+
+          <button
+            onClick={() => setShowSleepModal(false)}
+            className="w-full mt-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
     )}
   </div>
 );

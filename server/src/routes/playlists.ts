@@ -273,6 +273,9 @@ export async function playlistRoutes(app: FastifyInstance) {
         const filterArtist = item.filter_artist;
         const filterAlbum = item.filter_album;
         const filterTitle = item.filter_title;
+        const matchField = item.match_field;
+        const matchOp = item.match_op;
+        const matchValue = item.match_value;
 
         // 扫描所有音乐目录
         for (const musicPath of musicPaths) {
@@ -289,15 +292,68 @@ export async function playlistRoutes(app: FastifyInstance) {
                   // 检查是否匹配所有过滤条件
                   let match = true;
                   
-                  if (filterRegex && !filterRegex.test(filePath)) {
-                    match = false;
-                  }
-                  if (filterRegex && !filterRegex.test(fileName)) {
+                  // 正则匹配
+                  if (filterRegex && !filterRegex.test(filePath) && !filterRegex.test(fileName)) {
                     match = false;
                   }
                   
-                  // TODO: 艺术家/专辑/标题过滤需要查询 tracks 表
-                  // 这里简化处理，只做路径正则匹配
+                  // 匹配类型过滤
+                  if (match && matchField && matchOp && matchValue !== null) {
+                    // 查询 track_cache 获取元数据
+                    const cached = db.prepare('SELECT * FROM track_cache WHERE path = ?').get(filePath) as any;
+                    
+                    if (cached) {
+                      const fieldValue = cached[matchField];
+                      const numValue = parseFloat(matchValue);
+                      
+                      switch (matchOp) {
+                        case '>':
+                          if (typeof fieldValue === 'number') match = fieldValue > numValue;
+                          else match = false;
+                          break;
+                        case '<':
+                          if (typeof fieldValue === 'number') match = fieldValue < numValue;
+                          else match = false;
+                          break;
+                        case '>=':
+                          if (typeof fieldValue === 'number') match = fieldValue >= numValue;
+                          else match = false;
+                          break;
+                        case '<=':
+                          if (typeof fieldValue === 'number') match = fieldValue <= numValue;
+                          else match = false;
+                          break;
+                        case '=':
+                          match = String(fieldValue || '') === String(matchValue);
+                          break;
+                        case 'contains':
+                          if (matchField === 'genre') {
+                            try {
+                              const genres = cached.genre ? JSON.parse(cached.genre) : [];
+                              match = genres.some((g: string) => g.includes(matchValue));
+                            } catch { match = false; }
+                          } else {
+                            match = String(fieldValue || '').includes(matchValue);
+                          }
+                          break;
+                        case 'not_contains':
+                          if (matchField === 'genre') {
+                            try {
+                              const genres = cached.genre ? JSON.parse(cached.genre) : [];
+                              match = !genres.some((g: string) => g.includes(matchValue));
+                            } catch { match = true; }
+                          } else {
+                            match = !String(fieldValue || '').includes(matchValue);
+                          }
+                          break;
+                        default:
+                          match = false;
+                      }
+                    } else {
+                      // 没有缓存数据，不匹配
+                      match = false;
+                    }
+                  }
                   
                   if (match) {
                     trackPaths.push(filePath);
@@ -398,7 +454,7 @@ export async function playlistRoutes(app: FastifyInstance) {
   // 添加项目到播放列表
   app.post('/api/playlists/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { type, path: itemPath, includeSubdirs = false, filterRegex, filterArtist, filterAlbum, filterTitle } = req.body as {
+    const { type, path: itemPath, includeSubdirs = false, filterRegex, filterArtist, filterAlbum, filterTitle, matchField, matchOp, matchValue } = req.body as {
       type: 'directory' | 'file' | 'filter';
       path: string;
       includeSubdirs?: boolean;
@@ -406,6 +462,9 @@ export async function playlistRoutes(app: FastifyInstance) {
       filterArtist?: string;
       filterAlbum?: string;
       filterTitle?: string;
+      matchField?: string;
+      matchOp?: string;
+      matchValue?: string;
     };
 
     // 检查是否已存在相同的来源项
@@ -429,8 +488,8 @@ export async function playlistRoutes(app: FastifyInstance) {
     const order = (maxOrder?.max_order ?? -1) + 1;
 
     const result = db.prepare(
-      'INSERT INTO playlist_items (playlist_id, type, path, include_subdirs, filter_regex, filter_artist, filter_album, filter_title, "order") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(Number(id), type, itemPath, includeSubdirs ? 1 : 0, filterRegex || null, filterArtist || null, filterAlbum || null, filterTitle || null, order);
+      'INSERT INTO playlist_items (playlist_id, type, path, include_subdirs, filter_regex, filter_artist, filter_album, filter_title, match_field, match_op, match_value, "order") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(Number(id), type, itemPath, includeSubdirs ? 1 : 0, filterRegex || null, filterArtist || null, filterAlbum || null, filterTitle || null, matchField || null, matchOp || null, matchValue || null, order);
 
     db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), Number(id));
 
@@ -450,12 +509,15 @@ export async function playlistRoutes(app: FastifyInstance) {
   // 更新播放列表项
   app.put('/api/playlists/:id/items/:itemId', async (req, reply) => {
     const { id, itemId } = req.params as { id: string; itemId: string };
-    const { includeSubdirs, filterRegex, filterArtist, filterAlbum, filterTitle } = req.body as {
+    const { includeSubdirs, filterRegex, filterArtist, filterAlbum, filterTitle, matchField, matchOp, matchValue } = req.body as {
       includeSubdirs?: boolean;
       filterRegex?: string;
       filterArtist?: string;
       filterAlbum?: string;
       filterTitle?: string;
+      matchField?: string;
+      matchOp?: string;
+      matchValue?: string;
     };
 
     const item = db.prepare('SELECT * FROM playlist_items WHERE id = ? AND playlist_id = ?').get(Number(itemId), Number(id)) as any;
@@ -486,6 +548,18 @@ export async function playlistRoutes(app: FastifyInstance) {
       updates.push('filter_title = ?');
       values.push(filterTitle || null);
     }
+    if (matchField !== undefined) {
+      updates.push('match_field = ?');
+      values.push(matchField || null);
+    }
+    if (matchOp !== undefined) {
+      updates.push('match_op = ?');
+      values.push(matchOp || null);
+    }
+    if (matchValue !== undefined) {
+      updates.push('match_value = ?');
+      values.push(matchValue || null);
+    }
 
     if (updates.length > 0) {
       values.push(Number(itemId));
@@ -509,6 +583,66 @@ export async function playlistRoutes(app: FastifyInstance) {
   app.get('/api/favorites-playlist', async () => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('favorites_playlist_id') as { value: string } | undefined;
     return { playlistId: row ? Number(row.value) : null };
+  });
+
+  // 导入 AI 生成的播放列表
+  app.post('/api/playlists/import-ai', async (req, reply) => {
+    const { playlists } = req.body as {
+      playlists: Array<{
+        name: string;
+        description?: string;
+        tracks: string[]; // 文件路径列表
+      }>;
+    };
+
+    if (!playlists || !Array.isArray(playlists) || playlists.length === 0) {
+      return reply.code(400).send({ error: '播放列表数据无效' });
+    }
+
+    const created: any[] = [];
+    const now = Date.now();
+
+    for (const pl of playlists) {
+      if (!pl.name || !pl.tracks || pl.tracks.length === 0) continue;
+
+      // 创建播放列表
+      const result = db.prepare(
+        'INSERT INTO playlists (name, created_at, updated_at, is_auto, play_mode) VALUES (?, ?, ?, 0, ?)'
+      ).run(pl.name, now, now, 'shuffle');
+      const playlistId = result.lastInsertRowid;
+
+      // 为每个音轨路径创建 playlist_items 和 tracks 记录
+      for (const trackPath of pl.tracks) {
+        // 确保音轨存在于 tracks 表
+        let track = db.prepare('SELECT id FROM tracks WHERE path = ?').get(trackPath) as { id: number } | undefined;
+        if (!track) {
+          // 插入新音轨
+          const title = path.basename(trackPath).replace(/\.[^.]+$/, '');
+          const insertResult = db.prepare(
+            'INSERT INTO tracks (path, title, date_added) VALUES (?, ?, ?)'
+          ).run(trackPath, title, now);
+          track = { id: Number(insertResult.lastInsertRowid) };
+        }
+
+        // 关联音轨到播放列表
+        db.prepare(
+          'INSERT INTO playlist_tracks (playlist_id, track_id, "order") VALUES (?, ?, ?)'
+        ).run(playlistId, track.id, 0);
+      }
+
+      // 添加一个来源项记录（标记为 filter 类型，路径为 *）
+      db.prepare(
+        'INSERT INTO playlist_items (playlist_id, type, path, "order") VALUES (?, ?, ?, ?)'
+      ).run(playlistId, 'filter', '*', 0);
+
+      created.push({
+        id: playlistId,
+        name: pl.name,
+        track_count: pl.tracks.length
+      });
+    }
+
+    return { created: created.length, playlists: created };
   });
 
   // 查找匹配目录的播放列表

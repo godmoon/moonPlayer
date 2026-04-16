@@ -142,12 +142,17 @@ pm2 logs moonplayer-server
 
 - `GET/POST /api/playlists` - 播放列表 CRUD
 - `POST /api/playlists/:id/refresh` - 刷新音轨列表
+- `POST /api/playlists/import-ai` - 导入 AI 生成的播放列表
 
 ### 音轨
 
 - `GET /api/stream/:id` - 流式播放
 - `PUT /api/tracks/:id/rating` - 更新评分
 - `POST /api/tracks/:id/play` - 记录播放
+- `GET /api/tracks/cache` - 获取所有歌曲缓存
+- `POST /api/tracks/cache/refresh` - 刷新歌曲缓存
+- `POST /api/tracks/cache/import-genre` - 导入歌曲风格
+- `GET /api/tracks/genres` - 获取所有风格列表
 
 ## 常见修改场景
 
@@ -177,6 +182,67 @@ pm2 logs moonplayer-server
 5. **静态资源**: 前端构建后放在 `web/dist/`，后端自动服务
 
 ## 最近更新
+
+### 2026-04-16: AI 标签功能
+
+- **功能**: 将「AI创建播放列表」改为「AI标签」功能，支持给歌曲标注 1-30 个标签
+- **流程**: 
+  1. 点击「🏷️ AI标签」按钮
+  2. 获取 500 首未标注标签的歌曲信息
+  3. 复制提示词发送给外部 AI
+  4. 粘贴 AI 返回的标签数据（格式：ID|标签1,标签2,...）
+ 5. 导入标签完成标注
+- **数据库**: `track_cache` 表新增 `tags` 字段
+- **后端**: `server/src/routes/tracks.ts` 新增标签 API
+  - `GET /api/tracks/untagged-count` - 获取未标注歌曲数量
+  - `GET /api/tracks/untagged` - 获取未标注歌曲列表（支持分页）
+  - `POST /api/tracks/tags/import` - 导入标签数据
+  - `GET /api/tracks/tags/list` - 获取所有标签列表
+- **前端**: `PlaylistManager.tsx` 修改 AI 创建按钮为 AI 标签功能
+
+### 2026-04-16: 匹配类型播放列表
+
+- **功能**: 播放列表支持按条件筛选歌曲
+- **匹配字段**: 评分、年份、演唱者、专辑、风格
+- **操作符**: 大于、小于、等于、大于等于、小于等于、包含、不包含
+- **后端**: `playlist_items` 表新增 `match_field`、`match_op`、`match_value` 字段
+- **前端**: 添加来源弹窗新增「🎯 匹配」选项卡
+- **位置**: `PlaylistManager.tsx` 添加来源弹窗
+
+### 2026-04-16: 播放列表排序功能
+
+- **功能**: 播放列表和音轨列表都支持排序
+- **播放列表排序**: 名称、序号、随机
+- **音轨排序**: 名称、序号（数字开头）、随机、评分
+- **序号排序**: 按文件名开头的数字排序（如 1,2,10,11 而非字典序）
+- **位置**: `PlaylistManager.tsx`
+  - `PlaylistManager` 组件：播放列表排序下拉框
+  - `PlaylistDetail` 组件：音轨排序下拉框
+
+### 2026-04-16: 播放列表上次播放高亮
+
+- **功能**: 在「播放列表」中选择播放列表后，自动读取上次播放的文件并高亮显示「上次播放」标签
+- **实现**:
+  - `PlaylistDetail` 组件加载时调用 `getPlaylistHistory(playlistId)` 获取上次播放信息
+  - 高亮上次播放的音轨（紫色背景 + 边框）
+  - 显示「上次播放 (进度)」标签
+  - 自动滚动到上次播放的音轨位置
+  - 使用 `useRef` 实现滚动定位
+- **位置**: `PlaylistManager.tsx` 的 `PlaylistDetail` 组件
+
+### 2026-04-16: 睡眠定时功能
+
+- **功能**: 播放器支持睡眠定时，两种模式
+  - **一次性定时**: 设置时间后，到达时间停止播放，定时器关闭
+  - **重复定时**: 设置时间后，到达时间停止播放；手动继续播放后重新开始计时
+  - 用于睡眠时没睡着可以按耳机播放按钮继续听
+- **实现**:
+  - `playerStore.ts` 新增 `SleepTimerState` 和相关方法 (`setSleepTimer`, `clearSleepTimer`, `tickSleepTimer`)
+  - `AudioPlayer.tsx` 新增睡眠定时按钮和弹窗
+  - 定时选项: 15/30/45/60/90/120 分钟
+  - 每10秒检查一次定时器状态
+  - UI 显示剩余分钟数
+- **位置**: 播放界面下方按钮栏，播放模式按钮旁边
 
 ### 2026-04-15: 修复切歌后不自动播放
 
