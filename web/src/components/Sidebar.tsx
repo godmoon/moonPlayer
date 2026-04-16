@@ -25,6 +25,9 @@ export function Sidebar({ activeTab, onTabChange }: {
     return false;
   });
 
+  // 移动端抽屉控制
+  const [mobileOpen, setMobileOpen] = useState(false);
+
   // 导航顺序
   const [navTabs, setNavTabs] = useState(DEFAULT_TABS);
   const [loaded, setLoaded] = useState(false);
@@ -49,7 +52,12 @@ export function Sidebar({ activeTab, onTabChange }: {
 
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 768) setCollapsed(true);
+      if (window.innerWidth < 768) {
+        setCollapsed(true);
+      } else {
+        setCollapsed(false);
+        setMobileOpen(false);
+      }
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -58,6 +66,8 @@ export function Sidebar({ activeTab, onTabChange }: {
   // 点击当前激活的 tab 时，回到根目录
   const handleTabClick = (tabId: Tab) => {
     onTabChange(tabId);
+    // 手机端点击后关闭抽屉
+    if (window.innerWidth < 768) setMobileOpen(false);
     // 触发自定义事件，让页面组件知道需要重置
     window.dispatchEvent(new CustomEvent('sidebar-reset', { detail: { tab: tabId } }));
   };
@@ -125,60 +135,86 @@ export function Sidebar({ activeTab, onTabChange }: {
   };
 
   return (
-    <div className={`bg-gray-900 border-r border-gray-700 flex flex-col transition-all duration-300 ${collapsed ? 'w-14' : 'w-48'}`}>
-      {/* Logo / 收缩按钮 */}
-      <div className="p-2 md:p-3 border-b border-gray-700 flex items-center justify-between">
-        {!collapsed && <h1 className="text-lg font-bold text-purple-400">🎵</h1>}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className="text-gray-400 hover:text-white p-1"
-        >
-          {collapsed ? '▶' : '◀'}
-        </button>
-      </div>
-
-      {/* 导航 */}
-      <nav className="flex-1 p-1 md:p-2">
-        {!loaded ? (
-          <div className="text-gray-500 text-xs p-2">加载中...</div>
-        ) : (
-          navTabs.map((tab, index) => (
-            <div
-              key={tab.id}
-              draggable
-              onDragStart={(e) => handleDragStart(e, index)}
-              onDragEnd={handleDragEnd}
-              onDragOver={(e) => handleDragOver(e, index)}
-              onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, index)}
-              ref={draggedIndex === index ? dragNodeRef : null}
-              title={collapsed ? tab.label : undefined}
-              className={`w-full flex items-center gap-2 px-2 py-2 md:px-3 rounded text-left mb-1 cursor-grab transition-all duration-150 ${
-                activeTab === tab.id
-                  ? 'bg-purple-600 text-white'
-                  : 'hover:bg-gray-700 text-gray-300'
-              } ${
-                draggedIndex !== null && draggedIndex === index ? 'opacity-50' : ''
-              } ${
-                dragOverIndex === index ? 'border-t-2 border-purple-400' : ''
-              }`}
-              onClick={() => handleTabClick(tab.id)}
-            >
-              <span className="text-lg cursor-grab">{tab.icon}</span>
-              {!collapsed && <span className="text-sm md:text-base cursor-grab">{tab.label}</span>}
-            </div>
-          ))
-        )}
-      </nav>
-
-      {/* 版本 */}
-      {!collapsed && (
-        <div className="p-2 md:p-3 text-xs text-gray-600 border-t border-gray-700">
-          <div className="mb-1 text-gray-500">拖拽导航可排序</div>
-          moonPlayer v1.0.0
-        </div>
+    <>
+      {/* 手机端遮罩 */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40 md:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
       )}
-    </div>
+
+      {/* 手机端菜单按钮 */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="fixed top-3 left-3 w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center z-50 md:hidden"
+      >
+        ☰
+      </button>
+
+      {/* 侧边栏主体：你的代码完全保留，只加了移动端定位 */}
+      <div className={`
+        fixed top-0 left-0 h-full z-50
+        md:relative
+        transition-all duration-300
+        ${mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        bg-gray-900 border-r border-gray-700 flex flex-col
+        ${collapsed ? 'w-14' : 'w-48'}
+      `}>
+        {/* Logo / 收缩按钮 */}
+        <div className="p-2 md:p-3 border-b border-gray-700 flex items-center justify-between">
+          {!collapsed && <h1 className="text-lg font-bold text-purple-400">🎵 moonPlayer</h1>}
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            className="text-gray-400 hover:text-white p-1"
+          >
+            {collapsed ? '▶' : '◀'}
+          </button>
+        </div>
+
+        {/* 导航 */}
+        <nav className="flex-1 p-1 md:p-2">
+          {!loaded ? (
+            <div className="text-gray-500 text-xs p-2">加载中...</div>
+          ) : (
+            navTabs.map((tab, index) => (
+              <div
+                key={tab.id}
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                onDragEnd={handleDragEnd}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, index)}
+                ref={draggedIndex === index ? dragNodeRef : null}
+                title={collapsed ? tab.label : undefined}
+                className={`w-full flex items-center gap-2 px-2 py-2 md:px-3 rounded text-left mb-1 cursor-grab transition-all duration-150 ${
+                  activeTab === tab.id
+                    ? 'bg-purple-600 text-white'
+                    : 'hover:bg-gray-700 text-gray-300'
+                } ${
+                  draggedIndex !== null && draggedIndex === index ? 'opacity-50' : ''
+                } ${
+                  dragOverIndex === index ? 'border-t-2 border-purple-400' : ''
+                }`}
+                onClick={() => handleTabClick(tab.id)}
+              >
+                <span className="text-lg cursor-grab">{tab.icon}</span>
+                {!collapsed && <span className="text-sm md:text-base cursor-grab">{tab.label}</span>}
+              </div>
+            ))
+          )}
+        </nav>
+
+        {/* 版本 */}
+        {!collapsed && (
+          <div className="p-2 md:p-3 text-xs text-gray-600 border-t border-gray-700">
+            <div className="mb-1 text-gray-500">拖拽导航可排序</div>
+            moonPlayer v1.0.0
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

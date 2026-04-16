@@ -111,14 +111,14 @@ function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-950 text-white">
+    <div className="h-screen flex flex-col bg-gray-950 text-white overflow-hidden">
       {/* 主内容区 */}
       <div className="flex-1 flex overflow-hidden">
         {/* 侧边栏 */}
         <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
 
-        {/* 内容区 */}
-        <div className="flex-1 overflow-hidden">
+        {/* 内容区：手机端自动留出播放器空间 */}
+        <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain pb-[120px] md:pb-0">
           {activeTab === 'browse' && (
             <FileBrowser onPlay={handlePlay} onAddToPlaylist={() => {}} />
           )}
