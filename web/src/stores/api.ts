@@ -62,8 +62,14 @@ export async function deletePlaylist(id: number): Promise<void> {
   await api.delete(`/playlists/${id}`);
 }
 
-export async function addPlaylistItem(playlistId: number, type: 'directory' | 'file' | 'filter', path: string, includeSubdirs = false): Promise<any> {
-  const res = await api.post(`/playlists/${playlistId}/items`, { type, path, includeSubdirs });
+export async function addPlaylistItem(playlistId: number, type: 'directory' | 'file' | 'filter' | 'match', path: string, includeSubdirs = false, matchData?: { matchField: string; matchOp: string; matchValue: string }): Promise<any> {
+  const body: any = { type, path, includeSubdirs };
+  if (matchData) {
+    body.matchField = matchData.matchField;
+    body.matchOp = matchData.matchOp;
+    body.matchValue = matchData.matchValue;
+  }
+  const res = await api.post(`/playlists/${playlistId}/items`, body);
   return res.data;
 }
 

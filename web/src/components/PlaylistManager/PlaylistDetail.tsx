@@ -307,13 +307,15 @@ export function PlaylistDetail({ playlistId, onClose }: {
                   {item.type === 'directory' ? '📁' : item.type === 'filter' ? '🔍' : item.type === 'match' ? '🎯' : '📄'}
                 </span>
                 <span className="flex-1 truncate text-gray-300" title={item.path}>
-                  {item.type === 'filter'
-                    ? (item.filter_regex
-                      ? `正则: ${item.filter_regex}`
-                      : item.match_field
-                        ? `${MATCH_FIELDS.find(f => f.value === item.match_field)?.label || item.match_field} ${MATCH_OP_LABELS[item.match_op] || item.match_op} ${item.match_value}`
-                        : '(全部)')
-                    : item.path}
+                  {item.type === 'match'
+                    ? `${MATCH_FIELDS.find(f => f.value === item.match_field)?.label || item.match_field} ${MATCH_OP_LABELS[item.match_op] || item.match_op} ${item.match_value}`
+                    : item.type === 'filter'
+                      ? (item.filter_regex
+                        ? `正则: ${item.filter_regex}`
+                        : item.match_field
+                          ? `${MATCH_FIELDS.find(f => f.value === item.match_field)?.label || item.match_field} ${MATCH_OP_LABELS[item.match_op] || item.match_op} ${item.match_value}`
+                          : '(全部)')
+                      : item.path}
                 </span>
                 {item.type === 'directory' && (
                   <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">

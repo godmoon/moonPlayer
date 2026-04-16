@@ -276,6 +276,48 @@ function migrateDatabase(db: Database.Database) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id)`);
 
+  // 迁移 playlist_items 表的 CHECK 约束，添加 'match' 类型
+  try {
+    // 检查约束是否包含 'match'
+    const itemsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='playlist_items'").get() as { sql: string } | undefined;
+    if (itemsSql && !itemsSql.sql.includes("'match'")) {
+      // 需要重建表来更新约束
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS playlist_items_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          playlist_id INTEGER NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('directory', 'file', 'filter', 'match')),
+          path TEXT NOT NULL,
+          include_subdirs INTEGER DEFAULT 0,
+          filter_regex TEXT,
+          filter_artist TEXT,
+          filter_album TEXT,
+          filter_title TEXT,
+          match_field TEXT,
+          match_op TEXT,
+          match_value TEXT,
+          "order" INTEGER DEFAULT 0,
+          FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`
+        INSERT INTO playlist_items_new 
+        SELECT id, playlist_id, type, path, include_subdirs, filter_regex, filter_artist, filter_album, filter_title, 
+               COALESCE(match_field, NULL) as match_field, 
+               COALESCE(match_op, NULL) as match_op, 
+               COALESCE(match_value, NULL) as match_value, 
+               "order"
+        FROM playlist_items
+      `);
+      db.exec(`DROP TABLE playlist_items`);
+      db.exec(`ALTER TABLE playlist_items_new RENAME TO playlist_items`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items(playlist_id)`);
+    }
+  } catch (err) {
+    // 迁移失败时静默忽略，表结构可能已是最新
+    console.error('playlist_items CHECK 约束迁移失败:', err);
+  }
+
   // 更新 type 约束（需要重建表）
   // SQLite 不支持直接修改 CHECK 约束，这里简化处理
 

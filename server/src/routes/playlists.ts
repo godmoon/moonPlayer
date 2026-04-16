@@ -264,8 +264,8 @@ export async function playlistRoutes(app: FastifyInstance) {
           }
           scanDir(dirPath);
         }
-      } else if (item.type === 'filter') {
-        // 正则/过滤器匹配：遍历所有音乐目录
+      } else if (item.type === 'filter' || item.type === 'match') {
+        // 正则/匹配/过滤器：遍历所有音乐目录
         const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
         const musicPaths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
         
@@ -276,6 +276,8 @@ export async function playlistRoutes(app: FastifyInstance) {
         const matchField = item.match_field;
         const matchOp = item.match_op;
         const matchValue = item.match_value;
+        // 是否为纯匹配类型（无正则）
+        const isPureMatch = item.type === 'match' || (matchField && !filterRegex);
 
         // 扫描所有音乐目录
         for (const musicPath of musicPaths) {
@@ -292,8 +294,8 @@ export async function playlistRoutes(app: FastifyInstance) {
                   // 检查是否匹配所有过滤条件
                   let match = true;
                   
-                  // 正则匹配
-                  if (filterRegex && !filterRegex.test(filePath) && !filterRegex.test(fileName)) {
+                  // 正则匹配（非纯匹配类型才检查正则）
+                  if (!isPureMatch && filterRegex && !filterRegex.test(filePath) && !filterRegex.test(fileName)) {
                     match = false;
                   }
                   
@@ -455,7 +457,7 @@ export async function playlistRoutes(app: FastifyInstance) {
   app.post('/api/playlists/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { type, path: itemPath, includeSubdirs = false, filterRegex, filterArtist, filterAlbum, filterTitle, matchField, matchOp, matchValue } = req.body as {
-      type: 'directory' | 'file' | 'filter';
+      type: 'directory' | 'file' | 'filter' | 'match';
       path: string;
       includeSubdirs?: boolean;
       filterRegex?: string;

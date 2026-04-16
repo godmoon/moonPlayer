@@ -74,18 +74,12 @@ export function AddSourceModal({ playlistId, onClose, onSuccess }: AddSourceModa
       return;
     }
     try {
-      await addPlaylistItem(playlistId, 'filter', '*', false);
-      const result = await getPlaylist(playlistId);
-      const items = result.items || [];
-      const lastItem = items[items.length - 1];
-      if (lastItem) {
-        await updatePlaylistItem(playlistId, lastItem.id, {
-          filterRegex: '*',
-          matchField,
-          matchOp,
-          matchValue
-        });
-      }
+      // 直接使用 'match' 类型，不再使用 'filter' + filterRegex
+      await addPlaylistItem(playlistId, 'match', '*', false, {
+        matchField,
+        matchOp,
+        matchValue
+      });
       onSuccess();
       onClose();
     } catch (err) {
