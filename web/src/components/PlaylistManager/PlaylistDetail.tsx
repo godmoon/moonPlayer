@@ -1,10 +1,12 @@
 // 播放列表详情组件
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { getPlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, getPlaylistHistory, updatePlaylistItem, removePlaylistItem } from '../../stores/api';
+import { getPlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, getPlaylistHistory, updatePlaylistItem, removePlaylistItem, recordHistory } from '../../stores/api';
 import { usePlayerStore } from '../../stores/playerStore';
 import type { Track, Playlist } from '../../stores/playerStore';
 import { AddSourceModal } from './AddSourceModal';
 import { PLAY_MODES, TRACK_SORT_OPTIONS, MATCH_FIELDS, MATCH_OP_LABELS, formatDuration } from './utils';
+import { formatTrackTitle } from '../../utils/format';
+import { setPendingSeekPosition } from '../AudioPlayer/PlayerBar';
 
 export function PlaylistDetail({ playlistId, onClose }: {
   playlistId: number;
@@ -24,10 +26,10 @@ export function PlaylistDetail({ playlistId, onClose }: {
   const [lastPlayedTrackId, setLastPlayedTrackId] = useState<number | null>(null);
   const [lastPlayedPosition, setLastPlayedPosition] = useState<number>(0);
   const [trackSort, setTrackSort] = useState<string>('name');
-  const { setCurrentPlaylist, setCurrentTrack, setIsPlaying } = usePlayerStore();
+  const { currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying } = usePlayerStore();
   const lastPlayedRef = useRef<HTMLDivElement>(null);
 
-  const loadPlaylist = useCallback(async () => {
+  const loadPlaylist = useCallback(async (autoPlay = false) => {
     setLoading(true);
     try {
       const result = await getPlaylist(playlistId);
@@ -35,29 +37,81 @@ export function PlaylistDetail({ playlistId, onClose }: {
       const tracksResult = await refreshPlaylist(playlistId);
       setTracks(tracksResult.tracks || []);
 
+      let lastTrackId: number | null = null;
+      let lastPosition = 0;
       try {
         const history = await getPlaylistHistory(playlistId);
         if (history.lastTrack) {
-          setLastPlayedTrackId(history.lastTrack.id);
-          setLastPlayedPosition(history.position || 0);
-        } else {
-          setLastPlayedTrackId(null);
-          setLastPlayedPosition(0);
+          lastTrackId = history.lastTrack.id;
+          lastPosition = history.position || 0;
         }
+        setLastPlayedTrackId(lastTrackId);
+        setLastPlayedPosition(lastPosition);
       } catch (err) {
         console.error('获取播放历史失败:', err);
         setLastPlayedTrackId(null);
         setLastPlayedPosition(0);
+      }
+
+      // 自动播放逻辑：如果不是当前播放列表，则自动开始播放
+      if (autoPlay && tracksResult.tracks && tracksResult.tracks.length > 0) {
+        const isCurrentPlaylist = currentPlaylist?.id === playlistId;
+        
+        if (!isCurrentPlaylist) {
+          // 需要先保存当前播放位置
+          if (currentPlaylist && currentTrack) {
+            const audio = document.querySelector('audio');
+            if (audio) {
+              const position = audio.currentTime;
+              const duration = audio.duration || 0;
+              if (position > 1.0 && duration > 0 && position < duration) {
+                await recordHistory(currentPlaylist.id, currentTrack.id, position);
+              }
+            }
+          }
+
+          // 设置新的播放列表
+          const pl: Playlist = {
+            id: playlistId,
+            name: result.name,
+            createdAt: result.created_at,
+            updatedAt: result.updated_at,
+            isAuto: result.is_auto === 1,
+            playMode: result.play_mode,
+            skipIntro: result.skip_intro,
+            skipOutro: result.skip_outro
+          };
+          setCurrentPlaylist(pl, tracksResult.tracks);
+
+          // 定位到上次播放的曲目
+          let startTrack = tracksResult.tracks[0];
+          let seekPosition = 0;
+
+          if (lastTrackId) {
+            const lastTrack = tracksResult.tracks.find((t: Track) => t.id === lastTrackId);
+            if (lastTrack) {
+              startTrack = lastTrack;
+              seekPosition = lastPosition;
+            }
+          }
+
+          setCurrentTrack(startTrack);
+          setIsPlaying(true);
+
+          if (seekPosition > 0) {
+            setPendingSeekPosition(seekPosition);
+          }
+        }
       }
     } catch (err) {
       console.error('加载播放列表详情失败:', err);
     } finally {
       setLoading(false);
     }
-  }, [playlistId]);
+  }, [playlistId, currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying]);
 
   useEffect(() => {
-    loadPlaylist();
+    loadPlaylist(true); // 首次加载时自动播放
   }, [loadPlaylist]);
 
   // 滚动到上次播放的音轨
@@ -388,8 +442,8 @@ export function PlaylistDetail({ playlistId, onClose }: {
                   <span className="text-gray-500 w-6 text-center">{index + 1}</span>
                   <span className="text-green-500">🎵</span>
                   <div className="flex-1 min-w-0">
-                    <div className="truncate">{track.title}</div>
-                    <div className="text-xs text-gray-500">{track.artist || '未知艺术家'}</div>
+                    <div className="truncate">{formatTrackTitle(track)}</div>
+                    <div className="text-xs text-gray-500">{track.artist}</div>
                   </div>
                   {isLastPlayed && (
                     <span className="text-xs text-purple-400 bg-purple-900/50 px-2 py-0.5 rounded">

@@ -2,12 +2,11 @@
 import { useState, useEffect } from 'react';
 import { Sidebar, Tab } from './components/Sidebar';
 import { FileBrowser } from './components/FileBrowser/FileBrowser';
-import { PlaylistManager, PlaylistDetail } from './components/PlaylistManager';
+import { PlaylistDetail } from './components/PlaylistManager';
+import { UnifiedPlaylist } from './components/UnifiedPlaylist';
 import { Settings } from './components/Settings';
 import { PlayerBar } from './components/AudioPlayer';
 import { RatingManager } from './components/RatingManager';
-import { HistoryView } from './components/HistoryView';
-import { CurrentPlaylist } from './components/CurrentPlaylist';
 import { Login } from './components/Login';
 import { Setup } from './components/Setup';
 import { SearchView } from './components/SearchView';
@@ -131,13 +130,9 @@ function App() {
                 onClose={() => setSelectedPlaylistId(null)}
               />
             ) : (
-              <PlaylistManager onSelectPlaylist={handleSelectPlaylist} />
+              <UnifiedPlaylist onSelectPlaylist={handleSelectPlaylist} />
             )
           )}
-
-          {activeTab === 'current' && <CurrentPlaylist />}
-
-          {activeTab === 'history' && <HistoryView />}
 
           {activeTab === 'ratings' && <RatingManager />}
 

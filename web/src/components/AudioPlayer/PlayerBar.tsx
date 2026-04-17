@@ -7,7 +7,7 @@ import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory } 
 import { getDuration } from '../../stores/api';
 import { AddToPlaylistModal } from '../AddToPlaylistModal';
 import { SleepTimerModal } from './SleepTimerModal';
-import { PLAY_MODES, PLAY_MODE_LABELS, SKIP_AMOUNTS, setPendingSeekPosition, consumePendingSeekPosition, getLockedPosition, clearLockedPosition } from './utils';
+import { PLAY_MODES, PLAY_MODE_LABELS, SKIP_AMOUNTS, setPendingSeekPosition, consumePendingSeekPosition, getLockedPosition, clearLockedPosition, formatTrackTitle } from './utils';
 import type { PlayMode } from './utils';
 
 // 导出设置待恢复位置的函数
@@ -41,6 +41,15 @@ export function PlayerBar() {
   const getAudio = useCallback(() => {
     return playerRef.current?.audio?.current;
   }, []);
+
+  // 更新页面标题为当前播放歌曲
+  useEffect(() => {
+    if (currentTrack) {
+      document.title = `${formatTrackTitle(currentTrack)} - moonPlayer`;
+    } else {
+      document.title = 'moonPlayer';
+    }
+  }, [currentTrack]);
 
   // 更新音量
   useEffect(() => {
@@ -76,6 +85,14 @@ export function PlayerBar() {
     if (isPlaying && audio.paused) audio.play().catch(() => {});
     else if (!isPlaying && !audio.paused) audio.pause();
   }, [isPlaying, streamUrl, currentTrack?.id, getAudio]);
+
+  // 当新曲目加载完成后，如果应该播放则自动播放
+  const handleCanPlay = useCallback(() => {
+    const audio = getAudio();
+    if (isPlaying && audio && audio.paused) {
+      audio.play().catch(() => {});
+    }
+  }, [isPlaying, getAudio]);
   
   // 定期记录播放位置
   useEffect(() => {
@@ -92,7 +109,7 @@ export function PlayerBar() {
           nowState.currentTrack?.id !== LOCK_TRACK_ID) return;
 
       const now = Date.now();
-      if (now - lastHistoryRecordRef.current < 5000) return;
+      if (now - lastHistoryRecordRef.current < 20000) return;
 
       const realPos = audio.currentTime;
       const duration = audio.duration || 0;
@@ -158,8 +175,9 @@ export function PlayerBar() {
       await recordPlay(currentTrack.id, true, 0);
       await updateRating(currentTrack.id, 1);
     }
-    setIsPlaying(true);
     playNext();
+    // 切换曲目后设置播放状态，useEffect 会触发 audio.play()
+    setIsPlaying(true);
   }, [currentTrack, playNext, updateRating, setIsPlaying]);
 
   // 元数据加载
@@ -268,10 +286,22 @@ export function PlayerBar() {
   }, [skipAmounts.backward, getAudio]);
 
   // 删除并下一曲
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const handleDeleteAndNext = useCallback(async () => {
     if (!currentTrack) return;
-    await deleteTrack(currentTrack.id);
-    deleteAndPlayNext();
+    try {
+      const result = await deleteTrack(currentTrack.id, true);
+      if (result.error) {
+        setDeleteError(result.error);
+        setTimeout(() => setDeleteError(null), 3000);
+        return;
+      }
+      deleteAndPlayNext();
+    } catch (e) {
+      setDeleteError('删除失败');
+      setTimeout(() => setDeleteError(null), 3000);
+    }
   }, [currentTrack, deleteAndPlayNext]);
 
   const handleAddToFavorites = useCallback(() => setShowAddModal(true), []);
@@ -294,22 +324,19 @@ export function PlayerBar() {
     ? `💤 ${sleepTimer.remainingMinutes}分`
     : null;
 
-  if (!currentTrack) {
-    return <div className="fixed bottom-0 left-0 right-0 h-28 md:h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center text-gray-500">请选择音乐播放</div>;
-  }
-
+  if (currentTrack) {
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-[260px] md:h-[260px] bg-gray-900 border-t border-gray-800 px-2 md:px-6 py-4 z-50">
+    <div className="bottom-0 left-0 right-0 h-[260px] md:h-[260px] bg-gray-900 border-t border-gray-800 px-2 md:px-6 py-4 z-50">
       {/* 全端统一布局 */}
       <div className="flex flex-col gap-3 w-full">
         {/* 歌名 */}
         <div className="text-white font-medium text-base truncate">
-          {currentTrack.title}
+          {currentTrack && formatTrackTitle(currentTrack)}
         </div>
 
         {/* 歌手 */}
         <div className="text-gray-400 text-sm truncate">
-          {currentTrack.artist || '未知艺术家'}
+          {currentTrack.artist}
         </div>
 
         {/* 按钮栏 - 两行布局 */}
@@ -405,6 +432,7 @@ export function PlayerBar() {
             onPause={handlePause}
             onEnded={handleEnded}
             onLoadedMetaData={handleLoadedMetadata}
+            onCanPlay={handleCanPlay}
             volume={volume / 100}
             style={{ backgroundColor: 'transparent', boxShadow: 'none' }}
           />
@@ -418,6 +446,14 @@ export function PlayerBar() {
       {showSleepModal && (
         <SleepTimerModal onClose={() => setShowSleepModal(false)} />
       )}
+
+      {/* 删除失败弹窗 */}
+      {deleteError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded-lg shadow-lg z-[100]">
+          {deleteError}
+        </div>
+      )}
     </div>
   );
+  }
 }

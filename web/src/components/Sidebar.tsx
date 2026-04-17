@@ -2,14 +2,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { getNavOrder, setNavOrder } from '../stores/api';
 
-type Tab = 'browse' | 'playlists' | 'current' | 'history' | 'ratings' | 'settings' | 'search';
+type Tab = 'browse' | 'playlists' | 'ratings' | 'settings' | 'search';
 
 const DEFAULT_TABS: { id: Tab; icon: string; label: string }[] = [
   { id: 'browse', icon: '📁', label: '浏览' },
   { id: 'playlists', icon: '📋', label: '列表' },
-  { id: 'current', icon: '▶️', label: '当前' },
   { id: 'search', icon: '🔍', label: '搜索' },
-  { id: 'history', icon: '🕐', label: '历史' },
   { id: 'ratings', icon: '⭐', label: '评分' },
   { id: 'settings', icon: '⚙️', label: '设置' }
 ];

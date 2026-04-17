@@ -131,8 +131,9 @@ export async function filterTracks(filters: { artist?: string; album?: string; t
   return res.data.tracks;
 }
 
-export async function deleteTrack(trackId: number): Promise<void> {
-  await api.delete(`/tracks/${trackId}`);
+export async function deleteTrack(trackId: number, deleteFile = false): Promise<{ success: boolean; error?: string }> {
+  const res = await api.delete(`/tracks/${trackId}`, { params: { deleteFile } });
+  return res.data;
 }
 
 export async function getLowRatedTracks(threshold = -5, limit = 100): Promise<any[]> {

@@ -91,7 +91,7 @@ ${trackList}`;
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-start pt-20 justify-center z-[999]">
       <div className="bg-gray-800 rounded-lg p-4 w-[800px] max-h-[90vh] overflow-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium">🏷️ AI 标注歌曲标签</h3>

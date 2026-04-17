@@ -16,7 +16,8 @@ export const SKIP_AMOUNTS = [5, 10, 30, 60, 120];
 
 export const SLEEP_TIMER_OPTIONS = [15, 30, 45, 60, 90, 120];
 
-// 全局待恢复位置
+// 从共享位置导出
+export { formatTrackTitle } from '../../utils/format';
 let globalPendingSeekPosition: number | null = null;
 let globalIsSeekConsumed = false;
 let globalLockedPosition: number | null = null;
