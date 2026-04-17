@@ -2,45 +2,19 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { getDatabase } from '../db/schema.js';
 import { parseFile } from 'music-metadata';
-import { createClient } from 'webdav';
-
-// 需要 FFmpeg 支持的格式
-const NEEDS_TRANSCODE = ['.wma', '.ape', '.flac', '.wav', '.aac'];
-const TRANSCODE_FORMAT = '.mp3';
-
-// 转码缓存目录
-const TRANSCODE_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'transcode_cache');
-
-// WebDAV 文件缓存目录
-const WEBDAV_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'webdav_cache');
-
-// 确保缓存目录存在
-function ensureCacheDir() {
-  if (!fs.existsSync(TRANSCODE_CACHE_DIR)) {
-    fs.mkdirSync(TRANSCODE_CACHE_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(WEBDAV_CACHE_DIR)) {
-    fs.mkdirSync(WEBDAV_CACHE_DIR, { recursive: true });
-  }
-}
-
-// 获取缓存文件路径
-function getCachePath(filePath: string): string {
-  const hash = crypto.createHash('md5').update(filePath).digest('hex');
-  return path.join(TRANSCODE_CACHE_DIR, `${hash}.mp3`);
-}
-
-// 获取 WebDAV 缓存文件路径
-function getWebdavCachePath(configId: number, filePath: string): string {
-  const hash = crypto.createHash('md5').update(`${configId}:${filePath}`).digest('hex');
-  const ext = path.extname(filePath);
-  return path.join(WEBDAV_CACHE_DIR, `${hash}${ext}`);
-}
+import {
+  ensureCacheDir,
+  needsTranscode,
+  getWebdavCachePath,
+  getTranscodeCachePath,
+  getWebdavClient,
+  getWebdavConfig,
+  parseWebdavPath
+} from '../utils/webdavCache.js';
 
 export async function streamRoutes(app: FastifyInstance) {
   const db = getDatabase();
@@ -72,7 +46,7 @@ export async function streamRoutes(app: FastifyInstance) {
     // 检查是否需要转码（浏览器不支持的格式）
     if (needsTranscode(filePath)) {
       ensureCacheDir();
-      const cachePath = getCachePath(filePath);
+      const cachePath = getTranscodeCachePath(filePath);
       
       // 检查缓存是否存在且有效
       let useCache = false;
@@ -279,11 +253,8 @@ function getMimeType(filePath: string): string {
   return mimeTypes[ext] || 'audio/mpeg';
 }
 
-// 检查是否需要转码
-function needsTranscode(filePath: string): boolean {
-  const ext = path.extname(filePath).toLowerCase();
-  return NEEDS_TRANSCODE.includes(ext);
-}
+// 检查是否需要转码（从模块导入）
+// needsTranscode 已从 webdavCache 模块导入
 
 // 转码到文件（缓存）
 function transcodeToFile(filePath: string, outputPath: string): Promise<void> {
@@ -316,52 +287,6 @@ function transcodeToFile(filePath: string, outputPath: string): Promise<void> {
       reject(new Error(`FFmpeg 启动失败: ${err.message}`));
     });
   });
-}
-
-// 使用 FFmpeg 转码流（保留用于流式转码场景）
-function transcodeStream(filePath: string, start?: number): Promise<NodeJS.ReadableStream> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      '-i', filePath,
-      '-f', 'mp3',
-      '-ab', '192k',
-      '-vn', // 不包含视频
-    ];
-    
-    if (start) {
-      args.push('-ss', String(start / 1000)); // 跳转到指定位置
-    }
-    
-    args.push('-'); // 输出到 stdout
-    
-    const ffmpeg = spawn('ffmpeg', args);
-    
-    ffmpeg.on('error', (err) => {
-      reject(new Error(`FFmpeg 启动失败: ${err.message}`));
-    });
-    
-    // 等待 FFmpeg 开始输出
-    setTimeout(() => {
-      resolve(ffmpeg.stdout);
-    }, 100);
-  });
-}
-
-// WebDAV 客户端缓存
-const webdavClients = new Map<string, any>();
-
-function getWebdavClient(url: string, username?: string, password?: string) {
-  const key = `${url}|${username || ''}`;
-  
-  if (!webdavClients.has(key)) {
-    const client = createClient(url, {
-      username,
-      password
-    });
-    webdavClients.set(key, client);
-  }
-  
-  return webdavClients.get(key)!;
 }
 
 // 获取本地文件时长
@@ -408,40 +333,20 @@ async function getDurationViaFfprobe(filePath: string): Promise<number | null> {
   });
 }
 
-// WebDAV 客户端缓存（复用 webdav.ts 中的逻辑）
-const webdavClientsCache = new Map<string, any>();
-
-async function getWebdavClientCached(configId: number): Promise<any> {
-  const db = getDatabase();
-  const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as any;
-  if (!config) return null;
-  
-  const key = String(configId);
-  if (!webdavClientsCache.has(key)) {
-    const client = createClient(config.url, {
-      username: config.username || undefined,
-      password: config.password || undefined
-    });
-    webdavClientsCache.set(key, client);
-  }
-  
-  return webdavClientsCache.get(key);
-}
-
 // 获取 WebDAV 文件时长
 async function getWebdavFileDuration(configId: number, filePath: string): Promise<number | null> {
   try {
-    const client = await getWebdavClientCached(configId);
-    if (!client) return null;
+    const config = getWebdavConfig(configId);
+    if (!config) return null;
     
-    // 下载文件头部并用 ffprobe 解析
-    // 先尝试获取文件属性（部分 WebDAV 服务器可能返回时长）
+    const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
+    
+    // 下载文件头部并用 music-metadata 解析
     const stat = await client.stat(filePath) as any;
     if (stat?.duration) {
       return stat.duration;
     }
     
-    // 获取文件大小
     const size = stat?.size || 0;
     
     // 下载前 512KB 用于分析
@@ -452,14 +357,13 @@ async function getWebdavFileDuration(configId: number, filePath: string): Promis
       length: chunkSize
     });
     
-    // 使用 music-metadata 解析 Buffer
+    const { parseBuffer } = await import('music-metadata');
     const metadata = await parseBuffer(buffer as Buffer, { mimeType: getMimeType(filePath) });
     if (metadata.format.duration) {
       return metadata.format.duration;
     }
     
     // 无法从部分数据获取时长，需要完整下载
-    // 对于 WebDAV，先下载到临时文件再用 ffprobe
     return await getWebdavDurationViaDownload(configId, filePath);
   } catch (err) {
     console.error('获取 WebDAV 文件时长失败:', err);
@@ -467,26 +371,17 @@ async function getWebdavFileDuration(configId: number, filePath: string): Promis
   }
 }
 
-// 解析 Buffer 的音频元数据
-
-async function parseBuffer(buffer: Buffer, options?: { mimeType?: string }): Promise<any> {
-  try {
-    const { parseBuffer } = await import('music-metadata');
-    return await parseBuffer(buffer, options?.mimeType ? { mimeType: options.mimeType } : {});
-  } catch {
-    return { format: {} };
-  }
-}
-
 // 下载 WebDAV 文件并用 ffprobe 获取时长
 async function getWebdavDurationViaDownload(configId: number, filePath: string): Promise<number | null> {
   return new Promise(async (resolve) => {
     try {
-      const client = await getWebdavClientCached(configId);
-      if (!client) {
+      const config = getWebdavConfig(configId);
+      if (!config) {
         resolve(null);
         return;
       }
+      
+      const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
       
       // 创建临时管道
       const stream = await client.createReadStream(filePath);
@@ -525,17 +420,13 @@ async function getWebdavDurationViaDownload(configId: number, filePath: string):
 
 // 处理 WebDAV 文件流（支持 Range 请求）
 async function handleWebdavStream(req: any, reply: any, filePath: string) {
-  // 解析 webdav://configId/path 格式
-  const match = filePath.match(/^webdav:\/\/(\d+)(.+)$/);
-  if (!match) {
+  const parsed = parseWebdavPath(filePath);
+  if (!parsed) {
     return reply.code(400).send({ error: '无效的 WebDAV 路径格式' });
   }
   
-  const configId = parseInt(match[1], 10);
-  const webdavPath = match[2];
-  
-  const db = getDatabase();
-  const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as any;
+  const { configId, webdavPath } = parsed;
+  const config = getWebdavConfig(configId);
   if (!config) {
     return reply.code(404).send({ error: 'WebDAV 配置不存在' });
   }
@@ -543,7 +434,6 @@ async function handleWebdavStream(req: any, reply: any, filePath: string) {
   try {
     const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
     
-    // 确保缓存目录存在
     ensureCacheDir();
     const cachePath = getWebdavCachePath(configId, webdavPath);
     
@@ -570,15 +460,14 @@ async function handleWebdavStream(req: any, reply: any, filePath: string) {
     
     // 检查是否需要转码（浏览器不支持的格式）
     const ext = path.extname(webdavPath).toLowerCase();
-    const needsTranscodeFile = NEEDS_TRANSCODE.includes(ext);
+    const shouldTranscode = needsTranscode(webdavPath);
     
     let finalCachePath = cachePath;
     let mimeType = getMimeType(webdavPath);
     
-    if (needsTranscodeFile) {
+    if (shouldTranscode) {
       // 需要转码
-      const transcodeCachePath = path.join(TRANSCODE_CACHE_DIR, 
-        crypto.createHash('md5').update(`webdav:${configId}:${webdavPath}`).digest('hex') + '.mp3');
+      const transcodeCachePath = getTranscodeCachePath(webdavPath, `webdav:${configId}:`);
       
       let useTranscodeCache = false;
       if (fs.existsSync(transcodeCachePath)) {

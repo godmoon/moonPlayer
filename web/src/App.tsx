@@ -10,6 +10,7 @@ import { HistoryView } from './components/HistoryView';
 import { CurrentPlaylist } from './components/CurrentPlaylist';
 import { Login } from './components/Login';
 import { Setup } from './components/Setup';
+import { SearchView } from './components/SearchView';
 import { getNavOrder } from './stores/api';
 
 type AuthState = 'checking' | 'needSetup' | 'needLogin' | 'authenticated';
@@ -139,6 +140,8 @@ function App() {
           {activeTab === 'history' && <HistoryView />}
 
           {activeTab === 'ratings' && <RatingManager />}
+
+          {activeTab === 'search' && <SearchView />}
 
           {activeTab === 'settings' && <Settings />}
         </div>

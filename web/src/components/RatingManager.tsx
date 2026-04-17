@@ -1,6 +1,7 @@
 // 评分管理组件
 import { useState, useEffect, useCallback } from 'react';
 import { getLowRatedTracks, batchRating, resetAllRatings, deleteTrack } from '../stores/api';
+import { formatTrackTitle } from '../utils/format';
 
 export function RatingManager() {
   const [tracks, setTracks] = useState<any[]>([]);
@@ -142,8 +143,8 @@ export function RatingManager() {
                 />
                 <span className="text-green-500">🎵</span>
                 <div className="flex-1 min-w-0">
-                  <div className="truncate">{track.title}</div>
-                  <div className="text-xs text-gray-500 truncate">{track.artist || '未知艺术家'}</div>
+                  <div className="truncate">{formatTrackTitle(track)}</div>
+                  <div className="text-xs text-gray-500 truncate">{track.artist}</div>
                 </div>
                 <span className={`px-2 py-1 rounded text-sm ${track.rating < 0 ? 'bg-red-900 text-red-300' : 'bg-gray-700 text-gray-400'}`}>
                   {track.rating}

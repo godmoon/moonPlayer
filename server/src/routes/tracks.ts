@@ -1,11 +1,13 @@
 // 音轨路由
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../db/schema.js';
-import { parseFile } from 'music-metadata';
+import { parseFile, parseBuffer } from 'music-metadata';
 import { createClient } from 'webdav';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { parseWebdavPath, downloadWebdavFile, getWebdavCachePath, needsTranscode, ensureCacheDir, getTranscodeCachePath, getWebdavConfig, getWebdavClient } from '../utils/webdavCache.js';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,15 +105,18 @@ export async function trackRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const { completed, position } = req.body as { completed: boolean; position?: number };
 
-    const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id));
+    const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
     if (!track) {
       return reply.code(404).send({ error: '音轨不存在' });
     }
 
-    const duration = (track as any).duration || 0;
-    const rating = (track as any).rating;
-    const playCount = (track as any).play_count;
-    const skipCount = (track as any).skip_count;
+    // 尝试从文件读取元数据（如果数据库中缺少这些信息）
+    await enrichTrackMetadata(track);
+
+    const duration = track.duration || 0;
+    const rating = track.rating;
+    const playCount = track.play_count;
+    const skipCount = track.skip_count;
 
     // 自动评分逻辑
     let ratingDelta = 0;
@@ -156,14 +161,88 @@ export async function trackRoutes(app: FastifyInstance) {
       return { tracks: [] };
     }
 
-    const tracks = db.prepare(`
+    // 使用 pinyin-pro 做拼音转换
+    const { pinyin } = await import('pinyin-pro');
+    
+    // 获取搜索词的拼音首字母（去掉空格）
+    const queryInitials = pinyin(q, { toneType: 'none', pattern: 'first' }).replace(/\s+/g, '').toLowerCase();
+    // 获取搜索词的完整拼音（去掉空格）
+    const queryPinyin = pinyin(q, { toneType: 'none' }).replace(/\s+/g, '').toLowerCase();
+    
+    // 子序列匹配函数：检查 query 是否是 target 的子序列
+    const isSubsequence = (query: string, target: string): boolean => {
+      let i = 0, j = 0;
+      while (i < query.length && j < target.length) {
+        if (query[i] === target[j]) {
+          i++;
+        }
+        j++;
+      }
+      return i === query.length;
+    };
+    
+    // 先做基本的 LIKE 搜索（中文直接匹配）
+    const likeTracks = db.prepare(`
       SELECT * FROM tracks
-      WHERE title LIKE ? OR artist LIKE ? OR album LIKE ?
-      ORDER BY title
+      WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR path LIKE ?
       LIMIT 100
-    `).all(`%${q}%`, `%${q}%`, `%${q}%`);
+    `).all(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    
+    if (likeTracks.length > 0) {
+      return { tracks: likeTracks };
+    }
+    
+    // 拼音搜索：需要遍历更多数据
+    const allTracks = db.prepare(`SELECT * FROM tracks LIMIT 10000`).all();
+    
+    // 分类存储匹配结果
+    const exactMatches: any[] = [];      // 精确匹配
+    const initialMatches: any[] = [];   // 首字母匹配
+    const subseqMatches: any[] = [];    // 子序列匹配
+    
+    for (const track of allTracks) {
+      const t = track as any;
+      const title = t.title || '';
+      const artist = t.artist || '';
+      const path = t.path || '';
+      
+      // 获取各字段的拼音首字母和完整拼音
+      const titlePinyin = pinyin(title, { toneType: 'none' }).replace(/\s+/g, '').toLowerCase();
+      const artistPinyin = pinyin(artist, { toneType: 'none' }).replace(/\s+/g, '').toLowerCase();
+      const pathPinyin = pinyin(path, { toneType: 'none' }).replace(/\s+/g, '').toLowerCase();
+      
+      const titleInitials = pinyin(title, { toneType: 'none', pattern: 'first' }).replace(/\s+/g, '').toLowerCase();
+      const artistInitials = pinyin(artist, { toneType: 'none', pattern: 'first' }).replace(/\s+/g, '').toLowerCase();
+      const pathInitials = pinyin(path, { toneType: 'none', pattern: 'first' }).replace(/\s+/g, '').toLowerCase();
+      
+      // 1. 精确匹配（最高优先级）
+      if (titlePinyin.includes(queryPinyin) || artistPinyin.includes(queryPinyin) || pathPinyin.includes(queryPinyin)) {
+        exactMatches.push(t);
+        continue;
+      }
+      
+      // 2. 首字母精确包含
+      if (titleInitials.includes(queryInitials) || artistInitials.includes(queryInitials) || pathInitials.includes(queryInitials)) {
+        initialMatches.push(t);
+        continue;
+      }
+      
+      // 3. 子序列匹配
+      if (isSubsequence(queryPinyin, titlePinyin) || isSubsequence(queryPinyin, artistPinyin) || isSubsequence(queryPinyin, pathPinyin)) {
+        subseqMatches.push(t);
+        continue;
+      }
+      
+      // 4. 首字母子序列匹配
+      if (isSubsequence(queryInitials, titleInitials) || isSubsequence(queryInitials, artistInitials) || isSubsequence(queryInitials, pathInitials)) {
+        subseqMatches.push(t);
+      }
+    }
+    
+    // 按优先级合并结果
+    const tracks = [...exactMatches, ...initialMatches, ...subseqMatches];
 
-    return { tracks };
+    return { tracks: tracks.slice(0, 100) };
   });
 
   // 获取高分音轨（用于权重随机）
@@ -245,7 +324,62 @@ export async function trackRoutes(app: FastifyInstance) {
   // 删除音轨（从数据库）
   app.delete('/api/tracks/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
+    const { deleteFile } = req.query as { deleteFile?: string };
 
+    const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
+    if (!track) {
+      return reply.code(404).send({ error: '音轨不存在' });
+    }
+
+    // 如果要求删除物理文件
+    if (deleteFile === 'true') {
+      const filePath = track.path;
+      let deleteError: string | null = null;
+
+      // WebDAV 文件
+      if (filePath.startsWith('webdav://')) {
+        const parsed = parseWebdavPath(filePath);
+        if (parsed) {
+          const config = getWebdavConfig(parsed.configId);
+          if (config) {
+            try {
+              const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
+              await client.deleteFile(parsed.webdavPath);
+              // 删除成功后清理缓存
+              const cachePath = getWebdavCachePath(parsed.configId, parsed.webdavPath);
+              if (fs.existsSync(cachePath)) {
+                fs.unlinkSync(cachePath);
+              }
+              const transcodePath = getTranscodeCachePath(filePath, `webdav:${parsed.configId}:`);
+              if (fs.existsSync(transcodePath)) {
+                fs.unlinkSync(transcodePath);
+              }
+            } catch (err) {
+              deleteError = `WebDAV 删除失败: ${(err as Error).message}`;
+            }
+          } else {
+            deleteError = 'WebDAV 配置不存在';
+          }
+        } else {
+          deleteError = '无效的 WebDAV 路径';
+        }
+      } else {
+        // 本地文件
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (err) {
+          deleteError = `文件删除失败: ${(err as Error).message}`;
+        }
+      }
+
+      if (deleteError) {
+        return reply.code(500).send({ error: deleteError });
+      }
+    }
+
+    // 删除数据库记录
     db.prepare('DELETE FROM tracks WHERE id = ?').run(Number(id));
     db.prepare('DELETE FROM play_history WHERE track_id = ?').run(Number(id));
     db.prepare('DELETE FROM skip_history WHERE track_id = ?').run(Number(id));
@@ -522,4 +656,124 @@ export async function trackRoutes(app: FastifyInstance) {
     const tagList = Array.from(tagSet).sort((a, b) => a.localeCompare(b, 'zh-CN'));
     return { tags: tagList };
   });
+}
+
+// 从文件读取并更新元数据（如果数据库中缺少这些信息）
+async function enrichTrackMetadata(track: any) {
+  const filePath = track.path;
+  
+  // 检查是否需要更新元数据
+  const needsArtist = !track.artist;
+  const needsAlbum = !track.album;
+  const needsYear = !track.year;
+  const needsDuration = !track.duration;
+  
+  // 如果都有数据，不需要读取
+  if (!needsArtist && !needsAlbum && !needsYear && !needsDuration) {
+    return;
+  }
+  
+  let buffer: Buffer | null = null;
+  let localPath: string | null = null;
+  
+  // 处理 WebDAV 文件
+  if (filePath.startsWith('webdav://')) {
+    const parsed = parseWebdavPath(filePath);
+    if (!parsed) return;
+    
+    try {
+      const result = await downloadWebdavFile(parsed.configId, parsed.webdavPath);
+      if (!result) return;
+      
+      // 如果需要转码，检查转码缓存是否有效
+      if (result.needsTranscode && result.transcodeCachePath) {
+        ensureCacheDir();
+        if (fs.existsSync(result.transcodeCachePath)) {
+          // 转码缓存已存在，需要原始文件来读取元数据
+          // 使用原始缓存路径
+          localPath = result.cachePath;
+          buffer = result.buffer.length > 0 ? result.buffer : fs.readFileSync(result.cachePath);
+        } else {
+          // 需要转码但缓存不存在，使用下载的 Buffer
+          localPath = result.cachePath;
+          buffer = result.buffer;
+          // 写入缓存文件（如果还没有）
+          if (!fs.existsSync(result.cachePath)) {
+            fs.writeFileSync(result.cachePath, buffer);
+          }
+        }
+      } else {
+        // 不需要转码，直接使用下载的文件
+        localPath = result.cachePath;
+        buffer = result.buffer.length > 0 ? result.buffer : fs.readFileSync(result.cachePath);
+      }
+    } catch (err) {
+      console.error(`下载 WebDAV 文件失败 ${filePath}:`, err);
+      return;
+    }
+  } else {
+    // 本地文件
+    localPath = filePath;
+    try {
+      fs.accessSync(filePath, fs.constants.R_OK);
+    } catch {
+      return; // 文件不存在或无法读取
+    }
+  }
+  
+  try {
+    let metadata;
+    
+    if (buffer && buffer.length > 0) {
+      // 从 Buffer 解析元数据
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        '.mp3': 'audio/mpeg',
+        '.flac': 'audio/flac',
+        '.m4a': 'audio/mp4',
+        '.ogg': 'audio/ogg',
+        '.wav': 'audio/wav',
+        '.wma': 'audio/x-ms-wma',
+        '.ape': 'audio/x-ape',
+        '.aac': 'audio/aac'
+      };
+      metadata = await parseBuffer(buffer, { mimeType: mimeTypes[ext] });
+    } else if (localPath) {
+      // 从文件解析元数据
+      metadata = await parseFile(localPath, { duration: needsDuration });
+    } else {
+      return;
+    }
+    
+    const common = metadata.common;
+    
+    // 构建更新字段
+    const updates: { field: string; value: any }[] = [];
+    
+    if (needsArtist && common.artist) {
+      updates.push({ field: 'artist', value: common.artist });
+    }
+    if (needsAlbum && common.album) {
+      updates.push({ field: 'album', value: common.album });
+    }
+    if (needsYear && common.year) {
+      updates.push({ field: 'year', value: common.year });
+    }
+    if (needsDuration && metadata.format.duration) {
+      updates.push({ field: 'duration', value: metadata.format.duration });
+    }
+    
+    // 执行更新
+    if (updates.length > 0) {
+      const database = getDatabase();
+      const setClause = updates.map(u => `${u.field} = ?`).join(', ');
+      const values = updates.map(u => u.value);
+      values.push(track.id);
+      
+      database.prepare(`UPDATE tracks SET ${setClause} WHERE id = ?`).run(...values);
+    }
+  } catch (err) {
+    // 元数据读取失败，静默忽略
+    console.error(`读取元数据失败 ${filePath}:`, err);
+  }
 }

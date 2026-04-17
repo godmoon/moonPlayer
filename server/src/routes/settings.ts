@@ -3,7 +3,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import { getDatabase } from '../db/schema.js';
 
 // 默认导航项顺序
-const DEFAULT_NAV_ORDER = ['browse', 'playlists', 'current', 'history', 'ratings', 'settings'];
+const DEFAULT_NAV_ORDER = ['browse', 'playlists', 'current', 'search', 'history', 'ratings', 'settings'];
 
 export const settingsRoutes: FastifyPluginCallback = (fastify, _options, done) => {
   // 获取导航顺序

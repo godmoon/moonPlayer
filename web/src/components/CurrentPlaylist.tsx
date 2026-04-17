@@ -1,6 +1,7 @@
 // 当前播放列表组件
 import { useEffect, useRef } from 'react';
 import { usePlayerStore } from '../stores/playerStore';
+import { formatTrackTitle } from '../utils/format';
 
 export function CurrentPlaylist() {
   const { currentTrack, currentPlaylist, playlistTracks, setCurrentTrack, setIsPlaying } = usePlayerStore();
@@ -76,10 +77,10 @@ export function CurrentPlaylist() {
               <span className={isPlaying ? 'text-purple-400' : 'text-green-500'}>🎵</span>
               <div className="flex-1 min-w-0">
                 <div className={`truncate ${isPlaying ? 'text-purple-300 font-medium' : ''}`}>
-                  {track.title}
+                  {formatTrackTitle(track)}
                 </div>
                 <div className={`text-xs ${isPlaying ? 'text-purple-400' : 'text-gray-500'}`}>
-                  {isPlaying ? '正在播放' : (track.artist || '未知艺术家')}
+                  {isPlaying ? '正在播放' : track.artist}
                 </div>
               </div>
               <span className="text-xs text-gray-600">
