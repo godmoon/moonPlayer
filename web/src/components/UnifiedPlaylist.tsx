@@ -1,6 +1,6 @@
 // 统一播放列表组件 - 整合历史和列表功能
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getPlaylists, getRecentPlaylists, refreshPlaylist, recordHistory, createPlaylist } from '../stores/api';
+import { getPlaylists, getRecentPlaylists, getPlaylistTracks, recordHistory, createPlaylist } from '../stores/api';
 import { usePlayerStore } from '../stores/playerStore';
 import { setPendingSeekPosition } from './AudioPlayer/PlayerBar';
 import type { Track, Playlist } from '../stores/playerStore';
@@ -173,20 +173,20 @@ export function UnifiedPlaylist({ onSelectPlaylist }: {
         return;
       }
 
-      // 刷新并播放
-      const refreshed = await refreshPlaylist(item.id);
-      const trackList = refreshed.tracks as Track[];
+      // 只加载已有数据，不重新扫描
+      const result = await getPlaylistTracks(item.id);
+      const trackList = result.tracks as Track[];
       if (trackList.length === 0) return;
 
       const pl: Playlist = {
         id: item.id,
         name: item.name,
-        createdAt: refreshed.playlist.created_at,
-        updatedAt: refreshed.playlist.updated_at,
-        isAuto: refreshed.playlist.is_auto === 1,
-        playMode: refreshed.playlist.play_mode,
-        skipIntro: refreshed.playlist.skip_intro,
-        skipOutro: refreshed.playlist.skip_outro
+        createdAt: result.playlist.created_at,
+        updatedAt: result.playlist.updated_at,
+        isAuto: result.playlist.is_auto === 1,
+        playMode: result.playlist.play_mode,
+        skipIntro: result.playlist.skip_intro,
+        skipOutro: result.playlist.skip_outro
       };
       setCurrentPlaylist(pl, trackList);
 
@@ -211,9 +211,6 @@ export function UnifiedPlaylist({ onSelectPlaylist }: {
 
       // 进入详情页面
       onSelectPlaylist(item.id);
-
-      // 稍后刷新列表
-      setTimeout(() => loadData(), 500);
     } catch (err) {
       console.error('播放失败:', err);
     }

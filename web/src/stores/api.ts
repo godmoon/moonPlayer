@@ -86,6 +86,11 @@ export async function refreshPlaylist(playlistId: number): Promise<{ playlist: a
   return res.data;
 }
 
+export async function getPlaylistTracks(playlistId: number): Promise<{ playlist: any; tracks: any[] }> {
+  const res = await api.get(`/playlists/${playlistId}/tracks`);
+  return res.data;
+}
+
 // ========== 音轨 ==========
 
 export async function scanTracks(paths: string[]): Promise<{ insertedIds: number[]; existingIds: number[] }> {

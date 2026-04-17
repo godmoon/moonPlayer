@@ -1,6 +1,6 @@
 // 播放列表详情组件
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { getPlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, getPlaylistHistory, updatePlaylistItem, removePlaylistItem, recordHistory } from '../../stores/api';
+import { getPlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, getPlaylistHistory, updatePlaylistItem, removePlaylistItem, recordHistory, getPlaylistTracks } from '../../stores/api';
 import { usePlayerStore } from '../../stores/playerStore';
 import type { Track, Playlist } from '../../stores/playerStore';
 import { AddSourceModal } from './AddSourceModal';
@@ -34,7 +34,9 @@ export function PlaylistDetail({ playlistId, onClose }: {
     try {
       const result = await getPlaylist(playlistId);
       setPlaylist(result);
-      const tracksResult = await refreshPlaylist(playlistId);
+      
+      // 只加载已有数据，不重新扫描
+      const tracksResult = await getPlaylistTracks(playlistId);
       setTracks(tracksResult.tracks || []);
 
       let lastTrackId: number | null = null;

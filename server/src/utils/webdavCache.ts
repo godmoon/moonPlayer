@@ -13,8 +13,39 @@ const webdavClients = new Map<string, any>();
 const WEBDAV_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'webdav_cache');
 const TRANSCODE_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'transcode_cache');
 
-// 需要 FFmpeg 支持的格式
-const NEEDS_TRANSCODE = ['.wma', '.ape', '.flac', '.wav', '.aac'];
+// 需要 FFmpeg 支持的格式（默认值，可被前端检测结果覆盖）
+// 现代浏览器普遍支持 FLAC/WAV/AAC，只有 WMA/APE 基本需要转码
+const DEFAULT_NEEDS_TRANSCODE = ['.wma', '.ape'];
+
+// 运行时可被前端检测结果更新
+let NEEDS_TRANSCODE = [...DEFAULT_NEEDS_TRANSCODE];
+
+// 根据前端检测结果更新需要转码的格式列表
+export function updateTranscodeFormats(browserSupport: {
+  flac?: boolean;
+  wav?: boolean;
+  aac?: boolean;
+  m4a?: boolean;
+  ogg?: boolean;
+  mp3?: boolean;
+  wma?: boolean;
+  ape?: boolean;
+}): void {
+  const needs: string[] = [];
+  
+  // 前端不支持的格式需要转码
+  if (!browserSupport.flac) needs.push('.flac');
+  if (!browserSupport.wav) needs.push('.wav');
+  if (!browserSupport.aac) needs.push('.aac');
+  if (!browserSupport.m4a) needs.push('.m4a');
+  if (!browserSupport.ogg) needs.push('.ogg');
+  if (!browserSupport.mp3) needs.push('.mp3');
+  if (!browserSupport.wma) needs.push('.wma');
+  if (!browserSupport.ape) needs.push('.ape');
+  
+  NEEDS_TRANSCODE = needs.length > 0 ? needs : [...DEFAULT_NEEDS_TRANSCODE];
+  console.log('[moonPlayer] 更新转码格式列表:', NEEDS_TRANSCODE);
+}
 
 // 确保缓存目录存在
 export function ensureCacheDir() {

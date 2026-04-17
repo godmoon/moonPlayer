@@ -11,6 +11,7 @@ import { Login } from './components/Login';
 import { Setup } from './components/Setup';
 import { SearchView } from './components/SearchView';
 import { getNavOrder } from './stores/api';
+import { detectFormatSupport, logFormatSupport } from './utils/formatSupport';
 
 type AuthState = 'checking' | 'needSetup' | 'needLogin' | 'authenticated';
 
@@ -22,6 +23,20 @@ function App() {
   // 检查登录状态
   useEffect(() => {
     checkAuth();
+  }, []);
+
+  // 浏览器格式支持检测（只需运行一次）
+  useEffect(() => {
+    // 检测并记录到控制台
+    logFormatSupport();
+    
+    // 通知后端浏览器的格式支持情况
+    const support = detectFormatSupport();
+    fetch('/api/settings/format-support', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(support),
+    }).catch(err => console.error('通知格式支持失败:', err));
   }, []);
 
   const checkAuth = async () => {
@@ -118,7 +133,7 @@ function App() {
         <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
 
         {/* 内容区：手机端自动留出播放器空间 */}
-        <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain pb-[120px] md:pb-0">
+        <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain pb-[140px] md:pb-[100px]">
           {activeTab === 'browse' && (
             <FileBrowser onPlay={handlePlay} />
           )}

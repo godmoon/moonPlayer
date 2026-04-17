@@ -1,6 +1,7 @@
 // 设置路由
 import type { FastifyPluginCallback } from 'fastify';
 import { getDatabase } from '../db/schema.js';
+import { updateTranscodeFormats } from '../utils/webdavCache.js';
 
 // 默认导航项顺序
 const DEFAULT_NAV_ORDER = ['browse', 'playlists', 'current', 'search', 'history', 'ratings', 'settings'];
@@ -41,6 +42,25 @@ export const settingsRoutes: FastifyPluginCallback = (fastify, _options, done) =
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('nav_order', ?)").run(finalOrder.join(','));
     
     return { success: true, order: finalOrder };
+  });
+
+  // 接收前端浏览器格式支持检测结果
+  fastify.post<{ Body: {
+    flac?: boolean;
+    wav?: boolean;
+    aac?: boolean;
+    m4a?: boolean;
+    ogg?: boolean;
+    mp3?: boolean;
+    wma?: boolean;
+    ape?: boolean;
+  } }>('/api/settings/format-support', async (req, reply) => {
+    const support = req.body;
+    
+    // 更新转码格式列表
+    updateTranscodeFormats(support);
+    
+    return { success: true };
   });
 
   done();

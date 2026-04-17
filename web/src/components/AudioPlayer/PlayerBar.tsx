@@ -326,17 +326,12 @@ export function PlayerBar() {
 
   if (currentTrack) {
   return (
-    <div className="bottom-0 left-0 right-0 h-[260px] md:h-[260px] bg-gray-900 border-t border-gray-800 px-2 md:px-6 py-4 z-50">
+    <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 px-2 md:px-6 py-4 z-50 pb-[env(safe-area-inset-bottom)]">
       {/* 全端统一布局 */}
       <div className="flex flex-col gap-3 w-full">
         {/* 歌名 */}
         <div className="text-white font-medium text-base truncate">
           {currentTrack && formatTrackTitle(currentTrack)}
-        </div>
-
-        {/* 歌手 */}
-        <div className="text-gray-400 text-sm truncate">
-          {currentTrack.artist}
         </div>
 
         {/* 按钮栏 - 两行布局 */}
