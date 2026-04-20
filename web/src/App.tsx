@@ -12,6 +12,7 @@ import { Setup } from './components/Setup';
 import { SearchView } from './components/SearchView';
 import { getNavOrder } from './stores/api';
 import { detectFormatSupport, logFormatSupport } from './utils/formatSupport';
+import { setupNativeBridge } from './utils/nativeBridge';
 
 type AuthState = 'checking' | 'needSetup' | 'needLogin' | 'authenticated';
 
@@ -37,6 +38,9 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(support),
     }).catch(err => console.error('通知格式支持失败:', err));
+    
+    // 设置 Android/iOS 原生桥接
+    setupNativeBridge();
   }, []);
 
   const checkAuth = async () => {

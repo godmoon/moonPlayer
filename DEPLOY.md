@@ -29,6 +29,18 @@ pm2 logs moonplayer-server
 pm2 stop moonplayer-server
 ```
 
+### 生成Windows可执行文件
+#### 1. 方法1：用 GitHub 国内镜像
+export PKG_DOWNLOAD_MIRROR=https://github.com.cnpmjs.org
+
+##### 1. 方法2：直接去github下载对应包放到~/.pkg-cache/v3.4/：https://github.com/vercel/pkg-fetch/releases
+
+#### 2. 设置缓存
+export PKG_CACHE_PATH=~/.pkg-cache
+
+#### 3. 打包
+pkg dist/index.js -t node18-win-x64 -o moonplayer-server
+
 ### 开机自启
 
 ```bash

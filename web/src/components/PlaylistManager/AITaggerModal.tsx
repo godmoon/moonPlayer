@@ -27,7 +27,7 @@ export function AITaggerModal({ onClose }: AITaggerModalProps) {
       const tracks = await getUntaggedTracks(batchSize, 0);
       
       const trackList = tracks.map((t) => 
-        `${t.id}|${t.path}|${t.album || '未知'}|${t.artist || '未知'}|${t.year || '未知'}`
+        `${t.id}|${t.path}|${t.album || ''}|${t.artist || ''}|${t.year || ''}`
       ).join('\n');
 
       const prompt = `你是一个音乐播放列表管理助手。用户有以下歌曲库，请发挥你的想象力和创造力，针对每一首歌曲提供的信息，加上你自己的数据库，给他们分配1~30个标签，包括但不限于：儿童，纯音乐，开车，睡眠，休闲，放松等等，你自己发挥。

@@ -81,6 +81,26 @@ export async function removePlaylistItem(playlistId: number, itemId: number): Pr
   await api.delete(`/playlists/${playlistId}/items/${itemId}`);
 }
 
+// ========== 条件管理 (AND 条件) ============
+
+export async function getItemConditions(playlistId: number, itemId: number): Promise<any[]> {
+  const res = await api.get(`/playlists/${playlistId}/items/${itemId}/conditions`);
+  return res.data.conditions;
+}
+
+export async function addItemCondition(playlistId: number, itemId: number, condition: { matchField: string; matchOp: string; matchValue: string }): Promise<any> {
+  const res = await api.post(`/playlists/${playlistId}/items/${itemId}/conditions`, condition);
+  return res.data;
+}
+
+export async function updateItemCondition(playlistId: number, itemId: number, conditionId: number, data: { matchField?: string; matchOp?: string; matchValue?: string }): Promise<void> {
+  await api.put(`/playlists/${playlistId}/items/${itemId}/conditions/${conditionId}`, data);
+}
+
+export async function removeItemCondition(playlistId: number, itemId: number, conditionId: number): Promise<void> {
+  await api.delete(`/playlists/${playlistId}/items/${itemId}/conditions/${conditionId}`);
+}
+
 export async function refreshPlaylist(playlistId: number): Promise<{ playlist: any; tracks: any[] }> {
   const res = await api.post(`/playlists/${playlistId}/refresh`);
   return res.data;

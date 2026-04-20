@@ -30,7 +30,15 @@ export async function playlistRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: '播放列表不存在' });
     }
 
-    const items = db.prepare('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY "order"').all(Number(id));
+    const items = db.prepare('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY "order"').all(Number(id)) as any[];
+
+    // 获取每个 item 的条件
+    for (const item of items) {
+      if (item.type === 'match') {
+        const conditions = db.prepare('SELECT * FROM playlist_item_conditions WHERE item_id = ? ORDER BY "order"').all(item.id) as any[];
+        item.conditions = conditions;
+      }
+    }
 
     return { ...playlist, items };
   });
@@ -269,15 +277,65 @@ export async function playlistRoutes(app: FastifyInstance) {
         const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
         const musicPaths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
         
+        // 获取该 item 的所有条件（AND 条件）
+        const conditions = item.type === 'match' 
+          ? (db.prepare('SELECT * FROM playlist_item_conditions WHERE item_id = ? ORDER BY "order"').all(item.id) as any[])
+          : [];
+        
         const filterRegex = item.filter_regex ? new RegExp(item.filter_regex, 'i') : null;
         const filterArtist = item.filter_artist;
         const filterAlbum = item.filter_album;
         const filterTitle = item.filter_title;
-        const matchField = item.match_field;
-        const matchOp = item.match_op;
-        const matchValue = item.match_value;
+        // 兼容旧的单条件字段
+        const legacyMatchField = item.match_field;
+        const legacyMatchOp = item.match_op;
+        const legacyMatchValue = item.match_value;
+        
         // 是否为纯匹配类型（无正则）
-        const isPureMatch = item.type === 'match' || (matchField && !filterRegex);
+        const isPureMatch = item.type === 'match';
+
+        // 检查单个条件是否匹配
+        function checkCondition(cached: any, condField: string, condOp: string, condValue: string): boolean {
+          const fieldValue = cached[condField];
+          const numValue = parseFloat(condValue);
+          
+          switch (condOp) {
+            case '>':
+              if (typeof fieldValue === 'number') return fieldValue > numValue;
+              return false;
+            case '<':
+              if (typeof fieldValue === 'number') return fieldValue < numValue;
+              return false;
+            case '>=':
+              if (typeof fieldValue === 'number') return fieldValue >= numValue;
+              return false;
+            case '<=':
+              if (typeof fieldValue === 'number') return fieldValue <= numValue;
+              return false;
+            case '=':
+              return String(fieldValue || '') === String(condValue);
+            case 'contains':
+              if (condField === 'tags') {
+                try {
+                  const tags = cached.tags ? JSON.parse(cached.tags) : [];
+                  return tags.some((t: string) => t.includes(condValue));
+                } catch { return false; }
+              } else {
+                return String(fieldValue || '').includes(condValue);
+              }
+            case 'not_contains':
+              if (condField === 'tags') {
+                try {
+                  const tags = cached.tags ? JSON.parse(cached.tags) : [];
+                  return !tags.some((t: string) => t.includes(condValue));
+                } catch { return true; }
+              } else {
+                return !String(fieldValue || '').includes(condValue);
+              }
+            default:
+              return false;
+          }
+        }
 
         // 扫描所有音乐目录
         for (const musicPath of musicPaths) {
@@ -294,65 +352,33 @@ export async function playlistRoutes(app: FastifyInstance) {
                   // 检查是否匹配所有过滤条件
                   let match = true;
                   
-                  // 正则匹配（非纯匹配类型才检查正则）
+                  // 正则匹配（filter 类型）
                   if (!isPureMatch && filterRegex && !filterRegex.test(filePath) && !filterRegex.test(fileName)) {
                     match = false;
                   }
                   
-                  // 匹配类型过滤
-                  if (match && matchField && matchOp && matchValue !== null) {
-                    // 查询 tracks 获取元数据
+                  // 兼容旧的单条件字段
+                  if (match && !isPureMatch && legacyMatchField && legacyMatchOp && legacyMatchValue !== null) {
                     const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
-                    
                     if (cached) {
-                      const fieldValue = cached[matchField];
-                      const numValue = parseFloat(matchValue);
-                      
-                      switch (matchOp) {
-                        case '>':
-                          if (typeof fieldValue === 'number') match = fieldValue > numValue;
-                          else match = false;
-                          break;
-                        case '<':
-                          if (typeof fieldValue === 'number') match = fieldValue < numValue;
-                          else match = false;
-                          break;
-                        case '>=':
-                          if (typeof fieldValue === 'number') match = fieldValue >= numValue;
-                          else match = false;
-                          break;
-                        case '<=':
-                          if (typeof fieldValue === 'number') match = fieldValue <= numValue;
-                          else match = false;
-                          break;
-                        case '=':
-                          match = String(fieldValue || '') === String(matchValue);
-                          break;
-                        case 'contains':
-                          if (matchField === 'tags') {
-                            try {
-                              const tags = cached.tags ? JSON.parse(cached.tags) : [];
-                              match = tags.some((t: string) => t.includes(matchValue));
-                            } catch { match = false; }
-                          } else {
-                            match = String(fieldValue || '').includes(matchValue);
-                          }
-                          break;
-                        case 'not_contains':
-                          if (matchField === 'tags') {
-                            try {
-                              const tags = cached.tags ? JSON.parse(cached.tags) : [];
-                              match = !tags.some((t: string) => t.includes(matchValue));
-                            } catch { match = true; }
-                          } else {
-                            match = !String(fieldValue || '').includes(matchValue);
-                          }
-                          break;
-                        default:
+                      match = checkCondition(cached, legacyMatchField, legacyMatchOp, legacyMatchValue);
+                    } else {
+                      match = false;
+                    }
+                  }
+                  
+                  // 新的多条件 AND 匹配
+                  if (match && isPureMatch && conditions.length > 0) {
+                    const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
+                    if (cached) {
+                      // 所有条件都必须满足 (AND)
+                      for (const cond of conditions) {
+                        if (!checkCondition(cached, cond.match_field, cond.match_op, cond.match_value)) {
                           match = false;
+                          break;
+                        }
                       }
                     } else {
-                      // 没有缓存数据，不匹配
                       match = false;
                     }
                   }
@@ -577,6 +603,90 @@ export async function playlistRoutes(app: FastifyInstance) {
 
     db.prepare('DELETE FROM playlist_items WHERE id = ? AND playlist_id = ?').run(Number(itemId), Number(id));
     db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), Number(id));
+
+    return { success: true };
+  });
+
+  // ============ 条件管理 API (AND 条件) ============
+
+  // 获取来源项的所有条件
+  app.get('/api/playlists/:id/items/:itemId/conditions', async (req, reply) => {
+    const { itemId } = req.params as { itemId: string };
+    const conditions = db.prepare('SELECT * FROM playlist_item_conditions WHERE item_id = ? ORDER BY "order"').all(Number(itemId));
+    return { conditions };
+  });
+
+  // 添加条件到来源项
+  app.post('/api/playlists/:id/items/:itemId/conditions', async (req, reply) => {
+    const { id, itemId } = req.params as { id: string; itemId: string };
+    const { matchField, matchOp, matchValue } = req.body as {
+      matchField: string;
+      matchOp: string;
+      matchValue: string;
+    };
+
+    if (!matchField || !matchOp || matchValue === undefined) {
+      return reply.code(400).send({ error: '缺少条件参数' });
+    }
+
+    // 获取当前最大 order
+    const maxOrder = db.prepare('SELECT MAX("order") as max_order FROM playlist_item_conditions WHERE item_id = ?').get(Number(itemId)) as { max_order: number | null };
+    const order = (maxOrder?.max_order ?? -1) + 1;
+
+    const result = db.prepare(
+      'INSERT INTO playlist_item_conditions (item_id, match_field, match_op, match_value, "order") VALUES (?, ?, ?, ?, ?)'
+    ).run(Number(itemId), matchField, matchOp, matchValue, order);
+
+    db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), Number(id));
+
+    return {
+      id: result.lastInsertRowid,
+      item_id: Number(itemId),
+      match_field: matchField,
+      match_op: matchOp,
+      match_value: matchValue,
+      order
+    };
+  });
+
+  // 更新条件
+  app.put('/api/playlists/:id/items/:itemId/conditions/:conditionId', async (req, reply) => {
+    const { conditionId } = req.params as { conditionId: string };
+    const { matchField, matchOp, matchValue } = req.body as {
+      matchField?: string;
+      matchOp?: string;
+      matchValue?: string;
+    };
+
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (matchField !== undefined) {
+      updates.push('match_field = ?');
+      values.push(matchField);
+    }
+    if (matchOp !== undefined) {
+      updates.push('match_op = ?');
+      values.push(matchOp);
+    }
+    if (matchValue !== undefined) {
+      updates.push('match_value = ?');
+      values.push(matchValue);
+    }
+
+    if (updates.length > 0) {
+      values.push(Number(conditionId));
+      db.prepare(`UPDATE playlist_item_conditions SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    }
+
+    return { success: true };
+  });
+
+  // 删除条件
+  app.delete('/api/playlists/:id/items/:itemId/conditions/:conditionId', async (req, reply) => {
+    const { conditionId } = req.params as { conditionId: string };
+
+    db.prepare('DELETE FROM playlist_item_conditions WHERE id = ?').run(Number(conditionId));
 
     return { success: true };
   });

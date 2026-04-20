@@ -1,7 +1,14 @@
 // 添加来源弹窗组件
 import { useState, useEffect } from 'react';
-import { browseDirectory, getRoots, addPlaylistItem, updatePlaylistItem, getPlaylist, getTags } from '../../stores/api';
+import { browseDirectory, getRoots, addPlaylistItem, updatePlaylistItem, getPlaylist, getTags, addItemCondition } from '../../stores/api';
 import { MATCH_FIELDS, MATCH_OP_LABELS, type SourceType } from './utils';
+
+interface Condition {
+  id?: number;
+  match_field: string;
+  match_op: string;
+  match_value: string;
+}
 
 interface AddSourceModalProps {
   playlistId: number;
@@ -21,6 +28,9 @@ export function AddSourceModal({ playlistId, onClose, onSuccess }: AddSourceModa
   const [matchOp, setMatchOp] = useState<string>('>');
   const [matchValue, setMatchValue] = useState<string>('');
   const [tags, setTags] = useState<string[]>([]);
+  
+  // 多条件支持
+  const [conditions, setConditions] = useState<Condition[]>([]);
 
   // 加载音乐根目录
   useEffect(() => {
@@ -34,6 +44,13 @@ export function AddSourceModal({ playlistId, onClose, onSuccess }: AddSourceModa
     }
   }, [musicRoots]);
 
+  // 加载标签列表
+  useEffect(() => {
+    if (sourceType === 'match') {
+      getTags().then(setTags).catch(console.error);
+    }
+  }, [sourceType]);
+
   // 浏览目录
   const handleBrowse = async (dir: string | null) => {
     try {
@@ -42,6 +59,26 @@ export function AddSourceModal({ playlistId, onClose, onSuccess }: AddSourceModa
     } catch (err) {
       console.error('浏览目录失败:', err);
     }
+  };
+
+  // 添加条件
+  const handleAddCondition = () => {
+    if (!matchValue.trim()) {
+      alert('请输入匹配值');
+      return;
+    }
+    setConditions(prev => [...prev, {
+      match_field: matchField,
+      match_op: matchOp,
+      match_value: matchValue
+    }]);
+    // 重置值
+    setMatchValue('');
+  };
+
+  // 移除条件
+  const handleRemoveCondition = (index: number) => {
+    setConditions(prev => prev.filter((_, i) => i !== index));
   };
 
   // 添加来源 (用于正则类型)
@@ -67,19 +104,26 @@ export function AddSourceModal({ playlistId, onClose, onSuccess }: AddSourceModa
     }
   };
 
-  // 添加匹配来源
+  // 添加匹配来源（支持多条件）
   const handleAddMatchSource = async () => {
-    if (!matchValue.trim()) {
-      alert('请输入匹配值');
+    if (conditions.length === 0) {
+      alert('请至少添加一个条件');
       return;
     }
     try {
-      // 直接使用 'match' 类型，不再使用 'filter' + filterRegex
-      await addPlaylistItem(playlistId, 'match', '*', false, {
-        matchField,
-        matchOp,
-        matchValue
-      });
+      // 先添加来源项
+      const result = await addPlaylistItem(playlistId, 'match', '*', false);
+      const itemId = result.id;
+      
+      // 然后添加所有条件
+      for (const cond of conditions) {
+        await addItemCondition(playlistId, itemId, {
+          matchField: cond.match_field,
+          matchOp: cond.match_op,
+          matchValue: cond.match_value
+        });
+      }
+      
       onSuccess();
       onClose();
     } catch (err) {
@@ -279,8 +323,34 @@ export function AddSourceModal({ playlistId, onClose, onSuccess }: AddSourceModa
         {sourceType === 'match' && (
           <div>
             <div className="mb-3 text-xs text-gray-400">
-              根据歌曲属性创建动态播放列表(需要先刷新缓存)
+              根据歌曲属性创建动态播放列表（多个条件之间是"与"关系，所有条件都必须满足）
             </div>
+            
+            {/* 已添加的条件列表 */}
+            {conditions.length > 0 && (
+              <div className="mb-3 border border-gray-600 rounded p-2">
+                <div className="text-xs text-gray-400 mb-1">已添加的条件（全部满足）:</div>
+                {conditions.map((cond, index) => (
+                  <div key={index} className="flex items-center gap-2 py-1">
+                    <span className="text-sm flex-1">
+                      {MATCH_FIELDS.find(f => f.value === cond.match_field)?.label || cond.match_field}
+                      {' '}
+                      {MATCH_OP_LABELS[cond.match_op] || cond.match_op}
+                      {' '}
+                      <span className="text-blue-400">{cond.match_value}</span>
+                    </span>
+                    <button
+                      onClick={() => handleRemoveCondition(index)}
+                      className="text-red-400 hover:text-red-300 text-xs"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            {/* 添加新条件 */}
             <div className="flex gap-2 items-center mb-3">
               <select
                 value={matchField}
@@ -324,13 +394,22 @@ export function AddSourceModal({ playlistId, onClose, onSuccess }: AddSourceModa
                   className="flex-1 px-3 py-2 bg-gray-700 rounded text-sm"
                 />
               )}
+              <button
+                onClick={handleAddCondition}
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm"
+                disabled={!matchValue.trim()}
+              >
+                添加条件
+              </button>
             </div>
+            
             <div className="flex gap-2">
               <button
                 onClick={handleAddMatchSource}
                 className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded text-sm"
+                disabled={conditions.length === 0}
               >
-                添加
+                确认添加来源
               </button>
             </div>
           </div>

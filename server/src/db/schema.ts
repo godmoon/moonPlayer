@@ -276,6 +276,20 @@ function migrateDatabase(db: Database.Database) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id)`);
 
+  // 创建来源条件表（支持 AND 条件）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS playlist_item_conditions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      match_field TEXT NOT NULL,
+      match_op TEXT NOT NULL,
+      match_value TEXT NOT NULL,
+      "order" INTEGER DEFAULT 0,
+      FOREIGN KEY (item_id) REFERENCES playlist_items(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_item_conditions_item ON playlist_item_conditions(item_id)`);
+
   // 迁移 playlist_items 表的 CHECK 约束，添加 'match' 类型
   try {
     // 检查约束是否包含 'match'
@@ -318,8 +332,19 @@ function migrateDatabase(db: Database.Database) {
     console.error('playlist_items CHECK 约束迁移失败:', err);
   }
 
-  // 更新 type 约束（需要重建表）
-  // SQLite 不支持直接修改 CHECK 约束，这里简化处理
+  // 创建 playlist_item_conditions 表（如果不存在）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS playlist_item_conditions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      match_field TEXT NOT NULL,
+      match_op TEXT NOT NULL,
+      match_value TEXT NOT NULL,
+      "order" INTEGER DEFAULT 0,
+      FOREIGN KEY (item_id) REFERENCES playlist_items(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_item_conditions_item ON playlist_item_conditions(item_id)`);
 
   // 检查并添加 tracks 表的新字段
   const tracksInfo = db.prepare('PRAGMA table_info(tracks)').all() as { name: string }[];

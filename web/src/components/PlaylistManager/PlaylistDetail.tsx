@@ -23,8 +23,12 @@ export function PlaylistDetail({ playlistId, onClose }: {
   const [editSkipIntro, setEditSkipIntro] = useState(0);
   const [editSkipOutro, setEditSkipOutro] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [lastPlayedTrackId, setLastPlayedTrackId] = useState<number | null>(null);
-  const [lastPlayedPosition, setLastPlayedPosition] = useState<number>(0);
+  // 从初始化历史获取的播放位置（用于显示非当前播放列表的信息）
+  const [initialLastTrackId, setInitialLastTrackId] = useState<number | null>(null);
+  const [initialLastPosition, setInitialLastPosition] = useState<number>(0);
+
+  // 从 store 获取实时更新的播放位置（当前播放列表时使用）
+  const { lastPlayedPositions } = usePlayerStore();
   const [trackSort, setTrackSort] = useState<string>('name');
   const { currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying } = usePlayerStore();
   const lastPlayedRef = useRef<HTMLDivElement>(null);
@@ -47,12 +51,12 @@ export function PlaylistDetail({ playlistId, onClose }: {
           lastTrackId = history.lastTrack.id;
           lastPosition = history.position || 0;
         }
-        setLastPlayedTrackId(lastTrackId);
-        setLastPlayedPosition(lastPosition);
+        setInitialLastTrackId(lastTrackId);
+        setInitialLastPosition(lastPosition);
       } catch (err) {
         console.error('获取播放历史失败:', err);
-        setLastPlayedTrackId(null);
-        setLastPlayedPosition(0);
+        setInitialLastTrackId(null);
+        setInitialLastPosition(0);
       }
 
       // 自动播放逻辑：如果不是当前播放列表，则自动开始播放
@@ -116,12 +120,18 @@ export function PlaylistDetail({ playlistId, onClose }: {
     loadPlaylist(true); // 首次加载时自动播放
   }, [loadPlaylist]);
 
-  // 滚动到上次播放的音轨
+  // 计算需要高亮和滚动的曲目 ID
+  // 当前播放列表用 currentTrack，非当前播放列表用历史记录
+  const highlightTrackId = currentPlaylist?.id === playlistId 
+    ? currentTrack?.id 
+    : initialLastTrackId;
+
+  // 滚动到高亮的音轨
   useEffect(() => {
-    if (lastPlayedRef.current && lastPlayedTrackId) {
+    if (lastPlayedRef.current && highlightTrackId) {
       lastPlayedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [lastPlayedTrackId, loading]);
+  }, [highlightTrackId, loading]);
 
   // 打开设置时初始化表单
   useEffect(() => {
@@ -347,7 +357,10 @@ export function PlaylistDetail({ playlistId, onClose }: {
       {/* 来源列表 */}
       <div className="p-2 border-b border-gray-700 bg-gray-800/30">
         <div className="flex items-center justify-between mb-1">
-          <div className="text-xs text-gray-500">来源 ({playlist.items?.length || 0})</div>
+          <div className="text-xs text-gray-500">
+            来源 ({playlist.items?.length || 0})
+            <span className="text-gray-600 ml-2">多个来源之间是"或"关系</span>
+          </div>
           <button
             onClick={() => setShowAddSource(true)}
             className="px-2 py-0.5 bg-purple-600 hover:bg-purple-500 rounded text-xs"
@@ -358,38 +371,56 @@ export function PlaylistDetail({ playlistId, onClose }: {
         {playlist.items && playlist.items.length > 0 ? (
           <div className="space-y-1">
             {playlist.items.map((item: any) => (
-              <div key={item.id} className="flex items-center gap-2 text-sm bg-gray-700/50 px-2 py-1 rounded">
-                <span className="text-gray-400">
-                  {item.type === 'directory' ? '📁' : item.type === 'filter' ? '🔍' : item.type === 'match' ? '🎯' : '📄'}
-                </span>
-                <span className="flex-1 truncate text-gray-300" title={item.path}>
-                  {item.type === 'match'
-                    ? `${MATCH_FIELDS.find(f => f.value === item.match_field)?.label || item.match_field} ${MATCH_OP_LABELS[item.match_op] || item.match_op} ${item.match_value}`
-                    : item.type === 'filter'
-                      ? (item.filter_regex
-                        ? `正则: ${item.filter_regex}`
-                        : item.match_field
-                          ? `${MATCH_FIELDS.find(f => f.value === item.match_field)?.label || item.match_field} ${MATCH_OP_LABELS[item.match_op] || item.match_op} ${item.match_value}`
-                          : '(全部)')
-                      : item.path}
-                </span>
-                {item.type === 'directory' && (
-                  <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={item.include_subdirs === 1}
-                      onChange={() => handleToggleSubdirs(item)}
-                      className="w-3 h-3 rounded"
-                    />
-                    含子目录
-                  </label>
+              <div key={item.id} className="bg-gray-700/50 px-2 py-1 rounded">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-gray-400">
+                    {item.type === 'directory' ? '📁' : item.type === 'filter' ? '🔍' : item.type === 'match' ? '🎯' : '📄'}
+                  </span>
+                  <span className="flex-1 truncate text-gray-300" title={item.path}>
+                    {item.type === 'directory' 
+                      ? item.path 
+                      : item.type === 'filter' 
+                        ? `正则: ${item.filter_regex || '(全部)'}` 
+                        : item.type === 'match' 
+                          ? '匹配条件' 
+                          : item.path}
+                  </span>
+                  {item.type === 'directory' && (
+                    <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={item.include_subdirs === 1}
+                        onChange={() => handleToggleSubdirs(item)}
+                        className="w-3 h-3 rounded"
+                      />
+                      含子目录
+                    </label>
+                  )}
+                  <button
+                    onClick={() => handleRemoveSource(item.id)}
+                    className="text-red-400 hover:text-red-300 text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+                {/* 显示匹配类型的条件 */}
+                {item.type === 'match' && item.conditions && item.conditions.length > 0 && (
+                  <div className="mt-1 pl-6 text-xs text-gray-400">
+                    <span className="text-blue-400">条件:</span>{' '}
+                    {item.conditions.map((cond: any, idx: number) => (
+                      <span key={cond.id || idx}>
+                        {idx > 0 && <span className="text-green-400"> 且 </span>}
+                        <span>
+                          {MATCH_FIELDS.find(f => f.value === cond.match_field)?.label || cond.match_field}
+                          {' '}
+                          {MATCH_OP_LABELS[cond.match_op] || cond.match_op}
+                          {' '}
+                          <span className="text-blue-300">{cond.match_value}</span>
+                        </span>
+                      </span>
+                    ))}
+                  </div>
                 )}
-                <button
-                  onClick={() => handleRemoveSource(item.id)}
-                  className="text-red-400 hover:text-red-300 text-xs"
-                >
-                  ✕
-                </button>
               </div>
             ))}
           </div>
@@ -431,7 +462,16 @@ export function PlaylistDetail({ playlistId, onClose }: {
         ) : (
           <div className="space-y-1">
             {sortedTracks.map((track, index) => {
-              const isLastPlayed = track.id === lastPlayedTrackId;
+              const isLastPlayed = track.id === highlightTrackId;
+              
+              // 当前播放列表时，从 store 获取实时位置
+              // 非当前播放列表时，使用初始化时获取的历史位置
+              const storeKey = `${playlistId}-${track.id}`;
+              const storePosition = lastPlayedPositions[storeKey];
+              const displayPosition = currentPlaylist?.id === playlistId 
+                ? (track.id === currentTrack?.id ? (storePosition ?? 0) : 0)
+                : (track.id === initialLastTrackId ? initialLastPosition : 0);
+              
               return (
                 <div
                   key={track.id}
@@ -449,7 +489,7 @@ export function PlaylistDetail({ playlistId, onClose }: {
                   </div>
                   {isLastPlayed && (
                     <span className="text-xs text-purple-400 bg-purple-900/50 px-2 py-0.5 rounded">
-                      上次播放{lastPlayedPosition > 0 ? ` (${formatDuration(lastPlayedPosition)})` : ''}
+                      上次播放{displayPosition > 0 ? ` (${formatDuration(displayPosition)})` : ''}
                     </span>
                   )}
                   <span className="text-xs text-gray-600">{track.duration ? formatDuration(track.duration) : ''}</span>

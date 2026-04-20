@@ -37,10 +37,32 @@ export function PlayerBar() {
   const [skipAmounts, setSkipAmounts] = useState({ forward: 5, backward: 5 });
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSleepModal, setShowSleepModal] = useState(false);
+  const keepAliveRef = useRef<HTMLAudioElement | null>(null);
+  
+  // 🚗 车机多击控制适配
+  const playTapRef = useRef<number[]>([]);
+  const playTimerRef = useRef<any>(null);
 
   const getAudio = useCallback(() => {
     return playerRef.current?.audio?.current;
   }, []);
+
+  // 保活，避免浏览器在暂停后不久就销毁MediaSession
+useEffect(() => {
+  const a = new Audio();
+
+  // 一个极短静音mp3（你也可以换成自己文件）
+  a.src =
+    "data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAA...";
+  a.loop = true;
+  a.volume = 0;
+
+  // ⚠️关键：避免被当成用户媒体
+  a.muted = true;
+  a.setAttribute('playsinline', 'true');
+
+  keepAliveRef.current = a;
+}, []);
 
   // 更新页面标题为当前播放歌曲
   useEffect(() => {
@@ -67,6 +89,24 @@ export function PlayerBar() {
     
     return () => clearInterval(interval);
   }, [sleepTimer.mode, tickSleepTimer]);
+
+  useEffect(() => {
+  const handleVisibilityChange = () => {
+    // ✅ 页面进入后台 + 当前是暂停状态
+    if (document.hidden && !usePlayerStore.getState().isPlaying) {
+      const ka = keepAliveRef.current;
+      if (ka && ka.paused) {
+        ka.play().catch(() => {});
+      }
+    }
+  };
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
+  return () => {
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  };
+}, []);
 
   // 流媒体地址
   const streamUrl = currentTrack ? 
@@ -142,32 +182,55 @@ export function PlayerBar() {
   }, [currentTrack, currentPlaylist, getAudio]);
 
   // 播放
-  const handlePlay = useCallback(() => {
-    setIsPlaying(true);
-    playStartedRef.current = Date.now();
-    const audio = getAudio();
+const handlePlay = useCallback(() => {
+  setIsPlaying(true);
+  playStartedRef.current = Date.now();
 
-    if (audio && getLockedPosition() !== null) {
-      audio.currentTime = getLockedPosition()!;
-      clearLockedPosition();
-    }
+  const audio = getAudio();
 
-    if (currentTrack && currentPlaylist && audio && audio.currentTime > 1) {
-      recordHistory(currentPlaylist.id, currentTrack.id, audio.currentTime).catch(() => {});
-      lastHistoryRecordRef.current = Date.now();
-    }
-  }, [setIsPlaying, currentTrack, currentPlaylist, getAudio]);
+  // ✅ 停止保活音频
+  const ka = keepAliveRef.current;
+  if (ka && !ka.paused) {
+    ka.pause();
+  }
+
+  if (audio && getLockedPosition() !== null) {
+    audio.currentTime = getLockedPosition()!;
+    clearLockedPosition();
+  }
+
+  // ✅ 主音频播放
+  audio?.play().catch(() => {});
+
+  // ✅ 正确状态
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.playbackState = 'playing';
+  }
+
+}, [setIsPlaying, getAudio]);
 
   // 暂停
-  const handlePause = useCallback(() => {
-    setIsPlaying(false);
-    if (currentTrack && currentPlaylist) {
-      const audio = getAudio();
-      if (audio && audio.currentTime > 1) {
-        recordHistory(currentPlaylist.id, currentTrack.id, audio.currentTime).catch(() => {});
-      }
-    }
-  }, [setIsPlaying, currentTrack, currentPlaylist, getAudio]);
+const handlePause = useCallback(() => {
+  setIsPlaying(false);
+
+  const audio = getAudio();
+
+  // ✅ 真暂停主音频
+  audio?.pause();
+
+  // ✅ 启动静音保活（但不劫持状态）
+  const ka = keepAliveRef.current;
+  if (ka) {
+    ka.currentTime = 0;
+    ka.play().catch(() => {});
+  }
+
+  // ❗关键修复：状态必须是真实的
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.playbackState = 'paused'; // ✅ 不再伪装
+  }
+
+}, [setIsPlaying, getAudio]);
 
   // 播放结束
   const handleEnded = useCallback(async () => {
@@ -238,33 +301,109 @@ export function PlayerBar() {
     }
   }, [currentTrack, playMode, playNext, playPrevious, updateRating, currentPlaylist, getAudio]);
 
+  
+const handlePlayWrapped = useCallback(() => {
+  const isCarEnv = /car|lixiang|auto|vehicle/i.test(navigator.userAgent);
+
+  // 📱 非车机：直接原逻辑
+  if (!isCarEnv) {
+    handlePlay();
+    return;
+  }
+
+  const now = Date.now();
+
+  // 只保留1.2秒内点击（更灵敏）
+  playTapRef.current = playTapRef.current.filter(t => now - t <= 1200);
+  playTapRef.current.push(now);
+
+  const taps = playTapRef.current.length;
+
+  // 清掉“单击播放”的延迟任务
+  if (playTimerRef.current) {
+    clearTimeout(playTimerRef.current);
+  }
+
+  if (taps === 1) {
+    // ✅ 单击：延迟一点执行（防止被双击覆盖）
+    playTimerRef.current = setTimeout(() => {
+      handlePlay();
+      playTapRef.current = [];
+    }, 300); // 👉 关键：300ms 手感很好
+  }
+
+  else if (taps === 2) {
+    // ✅ 双击：立即下一曲（不等）
+    playTapRef.current = []; // 重置点击记录
+    handlePreviousOrNext('next');
+    setIsPlaying(true); // 确保播放状态
+  }
+
+  else if (taps >= 3) {
+    // ✅ 三击：立即上一曲（覆盖双击）
+    playTapRef.current = []; // 重置点击记录
+    handlePreviousOrNext('prev');
+    setIsPlaying(true); // 确保播放状态
+  }
+
+}, [handlePlay, handlePreviousOrNext]);
+
+
   // 媒体快捷键
   useEffect(() => {
-    if (!('mediaSession' in navigator) || !currentTrack) return;
+    if (!('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
-    ms.metadata = new MediaMetadata({
-      title: currentTrack.title, artist: currentTrack.artist || '未知', album: currentTrack.album
-    });
+
+    // ✅ metadata 始终用当前歌曲
+    if (currentTrack) {
+      ms.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist: currentTrack.artist || '未知',
+        album: currentTrack.album
+      });
+    }
+
+    // ✅ 状态真实
     ms.playbackState = isPlaying ? 'playing' : 'paused';
 
-    const handlers = {
-      play: () => { setIsPlaying(true); getAudio()?.play(); },
-      pause: () => { setIsPlaying(false); getAudio()?.pause(); },
-      previoustrack: () => handlePreviousOrNext('prev'),
-      nexttrack: () => handlePreviousOrNext('next'),
-      seekbackward: () => { const a = getAudio(); a && (a.currentTime -= 10); },
-      seekforward: () => { const a = getAudio(); a && (a.currentTime += 10); }
+    // ✅ 全部接管
+    const safe = (fn: () => void) => () => {
+      try { fn(); } catch {}
     };
 
-    Object.entries(handlers).forEach(([k, f]) => {
-      try { ms.setActionHandler(k as any, f); } catch {}
-    });
+    // ⚠️ 通知栏控制直接调用 handlePlay，不走车机多击检测
+    ms.setActionHandler('play', safe(() => {
+      handlePlay();
+    }));
+
+    ms.setActionHandler('pause', safe(() => {
+      handlePause();
+    }));
+
+    ms.setActionHandler('previoustrack', safe(() => {
+      handlePreviousOrNext('prev');
+    }));
+
+    ms.setActionHandler('nexttrack', safe(() => {
+      handlePreviousOrNext('next');
+    }));
+
+    ms.setActionHandler('seekbackward', safe(() => {
+      const a = getAudio();
+      if (a) a.currentTime -= 10;
+    }));
+
+    ms.setActionHandler('seekforward', safe(() => {
+      const a = getAudio();
+      if (a) a.currentTime += 10;
+    }));
+
     return () => {
-      ['play','pause','previoustrack','nexttrack','seekbackward','seekforward'].forEach(a => {
+      ['play', 'pause', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward'].forEach(a => {
         try { ms.setActionHandler(a as any, null); } catch {}
       });
     };
-  }, [currentTrack, isPlaying, handlePreviousOrNext, setIsPlaying, getAudio]);
+  }, [currentTrack, isPlaying, handlePlay, handlePause, handlePreviousOrNext, getAudio]);
 
   // 快进快退
   const handleSkipForward = useCallback(() => {
@@ -423,7 +562,7 @@ export function PlayerBar() {
             showJumpControls={false}
             onClickPrevious={() => handlePreviousOrNext('prev')}
             onClickNext={() => handlePreviousOrNext('next')}
-            onPlay={handlePlay}
+            onPlay={handlePlayWrapped}
             onPause={handlePause}
             onEnded={handleEnded}
             onLoadedMetaData={handleLoadedMetadata}
