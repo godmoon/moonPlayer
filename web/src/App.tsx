@@ -6,7 +6,6 @@ import { PlaylistDetail } from './components/PlaylistManager';
 import { UnifiedPlaylist } from './components/UnifiedPlaylist';
 import { Settings } from './components/Settings';
 import { PlayerBar } from './components/AudioPlayer';
-import { RatingManager } from './components/RatingManager';
 import { Login } from './components/Login';
 import { Setup } from './components/Setup';
 import { SearchView } from './components/SearchView';
@@ -155,8 +154,6 @@ function App() {
             ) : (
               <UnifiedPlaylist onSelectPlaylist={handleSelectPlaylist} />
             )
-          ) : activeTab === 'ratings' ? (
-            <RatingManager />
           ) : activeTab === 'search' ? (
             <SearchView />
           ) : activeTab === 'settings' ? (

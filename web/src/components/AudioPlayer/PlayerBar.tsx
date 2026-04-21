@@ -1,8 +1,8 @@
 // 音频播放器组件
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
 import AudioPlayer from 'react-h5-audio-player';
 import 'react-h5-audio-player/lib/styles.css';
-import { usePlayerStore } from '../../stores/playerStore';
+import { usePlayerStore, type QualityMode } from '../../stores/playerStore';
 import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory } from '../../stores/api';
 import { getDuration } from '../../stores/api';
 import { AddToPlaylistModal } from '../AddToPlaylistModal';
@@ -40,7 +40,6 @@ export function PlayerBar() {
   const [skipAmounts, setSkipAmounts] = useState({ forward: 5, backward: 5 });
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSleepModal, setShowSleepModal] = useState(false);
-  const keepAliveRef = useRef<HTMLAudioElement | null>(null);
   
   // 🚗 车机多击控制适配
   const playTapRef = useRef<number[]>([]);
@@ -50,22 +49,7 @@ export function PlayerBar() {
     return playerRef.current?.audio?.current;
   }, []);
 
-  // 保活，避免浏览器在暂停后不久就销毁MediaSession
-useEffect(() => {
-  const a = new Audio();
 
-  // 一个极短静音mp3（你也可以换成自己文件）
-  a.src =
-    "data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAA...";
-  a.loop = true;
-  a.volume = 0;
-
-  // ⚠️关键：避免被当成用户媒体
-  a.muted = true;
-  a.setAttribute('playsinline', 'true');
-
-  keepAliveRef.current = a;
-}, []);
 
   // 更新页面标题为当前播放歌曲
   useEffect(() => {
@@ -93,23 +77,7 @@ useEffect(() => {
     return () => clearInterval(interval);
   }, [sleepTimer.mode, tickSleepTimer]);
 
-  useEffect(() => {
-  const handleVisibilityChange = () => {
-    // ✅ 页面进入后台 + 当前是暂停状态
-    if (document.hidden && !usePlayerStore.getState().isPlaying) {
-      const ka = keepAliveRef.current;
-      if (ka && ka.paused) {
-        ka.play().catch(() => {});
-      }
-    }
-  };
-
-  document.addEventListener('visibilitychange', handleVisibilityChange);
-
-  return () => {
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-  };
-}, []);
+  
 
   // 流媒体地址
   const streamUrl = currentTrack ? 
@@ -123,6 +91,74 @@ useEffect(() => {
         return null;
       })() : getStreamUrl(currentTrack.id, qualityMode)) 
     : null;
+
+  // 品质切换时保存并恢复播放位置
+  // 持续跟踪当前播放位置
+  const currentPositionRef = useRef<number>(0);
+  const wasPlayingRef = useRef<boolean>(false);
+  const lastQualityRef = useRef<QualityMode>(qualityMode);
+  const savedPositionRef = useRef<{ trackId: number; position: number; wasPlaying: boolean } | null>(null);
+
+  // 使用 timeupdate 持续跟踪位置
+  useEffect(() => {
+    const audio = getAudio();
+    if (!audio) return;
+    
+    const updateTime = () => {
+      currentPositionRef.current = audio.currentTime;
+    };
+    
+    audio.addEventListener('timeupdate', updateTime);
+    return () => audio.removeEventListener('timeupdate', updateTime);
+  }, [getAudio, streamUrl]); // 添加 streamUrl 依赖，每次 src 变化时重新绑定
+
+  // 当 qualityMode 变化时，保存当前位置
+  useLayoutEffect(() => {
+    // 检测品质是否发生变化
+    if (lastQualityRef.current !== qualityMode && currentTrack) {
+      // 使用 ref 中保存的位置
+      savedPositionRef.current = {
+        trackId: currentTrack.id,
+        position: currentPositionRef.current,
+        wasPlaying: wasPlayingRef.current
+      };
+    }
+    lastQualityRef.current = qualityMode;
+  }, [qualityMode, currentTrack, getAudio]);
+
+  // 当 streamUrl 变化后，恢复播放位置
+  useEffect(() => {
+    const audio = getAudio();
+    if (!audio || !currentTrack) return;
+    
+    // 如果有保存的状态，且是同一首歌，恢复位置
+    if (savedPositionRef.current && savedPositionRef.current.trackId === currentTrack.id) {
+      const { position, wasPlaying } = savedPositionRef.current;
+      
+      // 等待音频加载完成后恢复位置
+      const restorePlay = () => {
+        if (audio.readyState >= 1) {
+          audio.currentTime = position;
+          if (wasPlaying) {
+            setIsPlaying(true);
+            audio.play().catch(() => {});
+          }
+          audio.removeEventListener('loadedmetadata', restorePlay);
+          audio.removeEventListener('canplay', restorePlay);
+        }
+      };
+      
+      if (audio.readyState >= 1) {
+        restorePlay();
+      } else {
+        audio.addEventListener('loadedmetadata', restorePlay);
+        audio.addEventListener('canplay', restorePlay);
+      }
+      
+      // 清空保存的状态
+      savedPositionRef.current = null;
+    }
+  }, [streamUrl, currentTrack?.id, getAudio, setIsPlaying]);
 
   // 播放状态同步
   useEffect(() => {
@@ -189,26 +225,19 @@ useEffect(() => {
 
   // 播放
 const handlePlay = useCallback(() => {
+  wasPlayingRef.current = true;
   setIsPlaying(true);
   playStartedRef.current = Date.now();
 
   const audio = getAudio();
-
-  // ✅ 停止保活音频
-  const ka = keepAliveRef.current;
-  if (ka && !ka.paused) {
-    ka.pause();
-  }
 
   if (audio && getLockedPosition() !== null) {
     audio.currentTime = getLockedPosition()!;
     clearLockedPosition();
   }
 
-  // ✅ 主音频播放
   audio?.play().catch(() => {});
 
-  // ✅ 正确状态
   if ('mediaSession' in navigator) {
     navigator.mediaSession.playbackState = 'playing';
   }
@@ -217,23 +246,14 @@ const handlePlay = useCallback(() => {
 
   // 暂停
 const handlePause = useCallback(() => {
+  wasPlayingRef.current = false;
   setIsPlaying(false);
 
   const audio = getAudio();
-
-  // ✅ 真暂停主音频
   audio?.pause();
 
-  // ✅ 启动静音保活（但不劫持状态）
-  const ka = keepAliveRef.current;
-  if (ka) {
-    ka.currentTime = 0;
-    ka.play().catch(() => {});
-  }
-
-  // ❗关键修复：状态必须是真实的
   if ('mediaSession' in navigator) {
-    navigator.mediaSession.playbackState = 'paused'; // ✅ 不再伪装
+    navigator.mediaSession.playbackState = 'paused';
   }
 
 }, [setIsPlaying, getAudio]);

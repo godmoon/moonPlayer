@@ -41,16 +41,6 @@ export function Settings() {
   useEffect(() => {
     loadMusicPaths();
     loadWebdavConfigs();
-    // 从 localStorage 恢复省流模式设置
-    try {
-      const savedQualityMode = localStorage.getItem('qualityMode');
-      if (savedQualityMode && ['low', 'medium', 'high', 'lossless'].includes(savedQualityMode)) {
-        // 只有当 store 中的值与 localStorage 不同时才设置
-        if (savedQualityMode !== usePlayerStore.getState().qualityMode) {
-          usePlayerStore.getState().setQualityMode(savedQualityMode as QualityMode);
-        }
-      }
-    } catch {}
   }, []);
 
   const loadMusicPaths = async () => {

@@ -10,22 +10,43 @@ export function isNativeApp(): boolean {
   return typeof (window as any).MoonPlayerApp !== 'undefined';
 }
 
+// 前进/后退递增逻辑（与 PlayerBar 保持一致）
+const SKIP_AMOUNTS = [5, 10, 30, 60, 120];
+let skipState = { forward: 5, backward: 5 };
+let skipTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function getSkipAmount(direction: 'forward' | 'backward'): number {
+  const amount = skipState[direction];
+  const idx = SKIP_AMOUNTS.indexOf(amount);
+  skipState[direction] = idx < SKIP_AMOUNTS.length - 1 ? SKIP_AMOUNTS[idx + 1] : 120;
+  
+  // 3秒后重置
+  if (skipTimeout) clearTimeout(skipTimeout);
+  skipTimeout = setTimeout(() => {
+    skipState = { forward: 5, backward: 5 };
+  }, 3000);
+  
+  return amount;
+}
+
 // 设置原生桥接
 export function setupNativeBridge() {
   // 暴露桥接接口给原生 App 调用
   (window as any).MoonPlayerBridge = {
     play: () => {
       const store = usePlayerStore.getState();
-      if (!store.isPlaying) {
-        store.setIsPlaying(true);
+      store.setIsPlaying(true);
+      const audio = document.querySelector('audio');
+      if (audio && audio.paused) {
+        audio.play().catch(() => {});
       }
     },
     
     pause: () => {
       const store = usePlayerStore.getState();
-      if (store.isPlaying) {
-        store.setIsPlaying(false);
-      }
+      store.setIsPlaying(false);
+      const audio = document.querySelector('audio');
+      if (audio) audio.pause();
     },
     
     next: () => {
@@ -40,11 +61,65 @@ export function setupNativeBridge() {
       store.setIsPlaying(true);
     },
     
-    seek: (positionMs: number) => {
+    forward: () => {
       const audio = document.querySelector('audio');
-      if (audio) {
-        audio.currentTime = positionMs / 1000;
+      if (!audio) return;
+      
+      const store = usePlayerStore.getState();
+      const amount = getSkipAmount('forward');
+      const newTime = audio.currentTime + amount;
+      const duration = audio.duration || 0;
+      
+      if (newTime >= duration - 0.5 && duration > 0) {
+        // 超出文件，切换下一曲
+        store.playNext();
+        store.setIsPlaying(true);
+      } else {
+        audio.currentTime = Math.min(newTime, duration - 0.5);
       }
+    },
+    
+    backward: () => {
+      const audio = document.querySelector('audio');
+      if (!audio) return;
+      
+      const store = usePlayerStore.getState();
+      const amount = getSkipAmount('backward');
+      const newTime = audio.currentTime - amount;
+      
+      if (newTime < 0) {
+        // 切换上一曲
+        store.playPrevious();
+        store.setIsPlaying(true);
+        // 上一曲从末尾开始
+        setTimeout(() => {
+          const newAudio = document.querySelector('audio');
+          if (newAudio && newAudio.duration > 0) {
+            newAudio.currentTime = Math.max(0, newAudio.duration - amount);
+          }
+        }, 500);
+      } else {
+        audio.currentTime = Math.max(newTime, 0);
+      }
+    },
+    
+    seek: (positionSec: number) => {
+      const audio = document.querySelector('audio');
+      if (!audio) {
+        console.error('[NativeBridge] seek: no audio element');
+        return;
+      }
+      
+      const duration = audio.duration || 0;
+      if (!isFinite(duration) || duration <= 0) {
+        console.error('[NativeBridge] seek: invalid duration', duration);
+        return;
+      }
+      
+      // 确保在有效范围内
+      const seekTime = Math.max(0, Math.min(positionSec, duration - 0.5));
+      console.log('[NativeBridge] seek to:', seekTime, 'duration:', duration);
+      audio.currentTime = seekTime;
     }
   };
   
@@ -58,37 +133,69 @@ export function setupNativeBridge() {
 
 // 同步播放状态到原生 App
 function setupStateSync() {
-  let lastUpdate = 0;
+  let lastTrackId: number | null = null;
+  let lastIsPlaying: boolean = false;
+  let lastPosition: number = 0;
+  let lastDuration: number = 0;
   
-  // 监听 store 变化
+  // 定期同步进度（每 2 秒）
+  setInterval(() => {
+    const audio = document.querySelector('audio');
+    const state = usePlayerStore.getState();
+    
+    const currentTrackId = state.currentTrack?.id || null;
+    const isPlaying = state.isPlaying;
+    const position = audio?.currentTime || 0;
+    const duration = audio?.duration || 0;
+    
+    // 只有变化时才更新
+    if (currentTrackId !== lastTrackId ||
+        isPlaying !== lastIsPlaying ||
+        Math.abs(position - lastPosition) > 2 ||
+        Math.abs(duration - lastDuration) > 1) {
+      
+      lastTrackId = currentTrackId;
+      lastIsPlaying = isPlaying;
+      lastPosition = position;
+      lastDuration = duration;
+      
+      updateNativeMedia(state, audio);
+    }
+  }, 2000);
+  
+  // 监听 store 变化（立即响应曲目切换和播放状态变化）
   usePlayerStore.subscribe((state, prevState) => {
-    const now = Date.now();
-    // 节流：最多每秒更新一次
-    if (now - lastUpdate < 1000) return;
+    // 曲目变化
+    if (state.currentTrack?.id !== prevState.currentTrack?.id) {
+      setTimeout(() => {
+        const audio = document.querySelector('audio');
+        updateNativeMedia(state, audio);
+      }, 100);
+    }
     
     // 播放状态变化
-    if (state.isPlaying !== prevState.isPlaying || 
-        state.currentTrack?.id !== prevState.currentTrack?.id) {
-      updateNativeMedia();
-      lastUpdate = now;
+    if (state.isPlaying !== prevState.isPlaying) {
+      const audio = document.querySelector('audio');
+      updateNativeMedia(state, audio);
     }
   });
   
   // 初始更新
-  setTimeout(() => updateNativeMedia(), 1000);
+  setTimeout(() => {
+    const audio = document.querySelector('audio');
+    const state = usePlayerStore.getState();
+    updateNativeMedia(state, audio);
+  }, 1000);
 }
 
 // 更新原生 App 的媒体信息
-function updateNativeMedia() {
-  const state = usePlayerStore.getState();
-  const audio = document.querySelector('audio');
-  
+function updateNativeMedia(state: ReturnType<typeof usePlayerStore.getState>, audio: HTMLAudioElement | null) {
   if (!(window as any).MoonPlayerApp) return;
   
   try {
     (window as any).MoonPlayerApp.updateMedia(JSON.stringify({
-      title: state.currentTrack?.title || '未知歌曲',
-      artist: state.currentTrack?.artist || '未知艺术家',
+      title: state.currentTrack?.title || 'MoonPlayer',
+      artist: state.currentTrack?.artist || '',
       album: state.currentTrack?.album || '',
       duration: audio?.duration || 0,
       position: audio?.currentTime || 0,

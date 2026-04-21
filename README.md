@@ -258,6 +258,27 @@ npm rebuild better-sqlite3
 pm2 logs moonplayer-server --lines 100
 ```
 
+## AI 开发快速参考
+
+**关键文件:**
+- `server/src/routes/stream.ts` - 音频流传输（含品质转码）
+- `server/src/routes/tracks.ts` - 音轨 API
+- `web/src/stores/playerStore.ts` - 播放器状态
+- `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件
+
+**常用命令:**
+```bash
+cd server && npm run build      # 后端构建
+cd web && npm run build         # 前端构建
+pm2 restart moonplayer-server  # 重启服务
+```
+
+**品质模式:** `low`(120k) / `medium`(192k) / `high`(320k) / `lossless`
+
+**播放模式:** 顺序 / 随机 / 权重随机 / 乱序 / 单曲循环
+
+**评分:** 完整听完+1分，快切-1分，手工👍👎
+
 ## License
 
 MIT

@@ -111,6 +111,17 @@ interface PlayerState {
 
 }
 
+// 从 localStorage 恢复 qualityMode
+function getInitialQualityMode(): QualityMode {
+  try {
+    const saved = localStorage.getItem('qualityMode');
+    if (saved && ['low', 'medium', 'high', 'lossless'].includes(saved)) {
+      return saved as QualityMode;
+    }
+  } catch {}
+  return 'lossless';
+}
+
 export const usePlayerStore = create<PlayerState>((set, get) => ({
   currentTrack: null,
   currentPlaylist: null,
@@ -129,7 +140,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     endTime: null,
     remainingMinutes: 0
   },
-  qualityMode: 'lossless' as QualityMode,
+  qualityMode: getInitialQualityMode(),
 
   // 👇 新增
   lastPlayedPositions: {},
