@@ -1,16 +1,42 @@
 // 音轨路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 import { parseFile, parseBuffer } from 'music-metadata';
 import { createClient } from 'webdav';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { parseWebdavPath, downloadWebdavFile, getWebdavCachePath, needsTranscode, ensureCacheDir, getTranscodeCachePath, getWebdavConfig, getWebdavClient } from '../utils/webdavCache.js';
 import { spawn } from 'child_process';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// 获取当前文件所在目录（兼容 pkg 打包）
+function getDirname(): string {
+  // pkg 打包环境
+  if ((process as any).pkg) {
+    return path.dirname(process.execPath);
+  }
+  // ESM 环境
+  try {
+    // @ts-ignore
+    if (typeof import.meta === 'object' && import.meta.url && typeof import.meta.url === 'string') {
+      // @ts-ignore
+      const { fileURLToPath } = require('url');
+      let pathname = fileURLToPath(import.meta.url);
+      if (process.platform === 'win32' && pathname.startsWith('/')) {
+        pathname = pathname.substring(1);
+      }
+      return path.dirname(pathname);
+    }
+  } catch {}
+  // CJS 兜底（esbuild 打包后 bundle.cjs）
+  // @ts-ignore
+  if (typeof __dirname === 'string') {
+    // @ts-ignore
+    return __dirname;
+  }
+  // 最终兜底：当前工作目录
+  return process.cwd();
+}
+const __dirname = getDirname();
 
 export async function trackRoutes(app: FastifyInstance) {
   const db = getDatabase();
@@ -29,8 +55,10 @@ export async function trackRoutes(app: FastifyInstance) {
 
     for (const filePath of paths) {
       try {
+        const normalizedPath = normalizePath(filePath);
+        
         // 检查是否已存在
-        const existing = db.prepare('SELECT id FROM tracks WHERE path = ?').get(filePath);
+        const existing = db.prepare('SELECT id FROM tracks WHERE path = ?').get(normalizedPath);
         if (existing) {
           existingIds.push((existing as any).id);
           continue;
@@ -60,7 +88,7 @@ export async function trackRoutes(app: FastifyInstance) {
         const result = db.prepare(`
           INSERT INTO tracks (path, title, artist, album, duration, rating, play_count, skip_count, date_added)
           VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?)
-        `).run(filePath, title, artist || null, album || null, duration || null, Date.now());
+        `).run(normalizedPath, title, artist || null, album || null, duration || null, Date.now());
 
         insertedIds.push(Number(result.lastInsertRowid));
       } catch (err) {

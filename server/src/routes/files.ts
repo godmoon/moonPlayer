@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'fs';
 import path from 'path';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 
 export async function filesRoutes(app: FastifyInstance) {
   const db = getDatabase();
@@ -87,9 +87,10 @@ export async function filesRoutes(app: FastifyInstance) {
 
     // 安全检查：确保在某个音乐目录内
     const resolvedPath = path.resolve(targetPath);
+    const normalizedResolved = normalizePath(resolvedPath);
     const isInAllowedPath = rootPaths.some((rp: string) => {
-      const resolvedRoot = path.resolve(rp);
-      return resolvedPath.startsWith(resolvedRoot) || resolvedPath === resolvedRoot;
+      const resolvedRoot = normalizePath(path.resolve(rp));
+      return normalizedResolved.startsWith(resolvedRoot) || normalizedResolved === resolvedRoot;
     });
     
     if (!isInAllowedPath) {
@@ -98,8 +99,8 @@ export async function filesRoutes(app: FastifyInstance) {
 
     // 找到当前路径所属的根目录
     const currentRoot = rootPaths.find((rp: string) => {
-      const resolvedRoot = path.resolve(rp);
-      return resolvedPath.startsWith(resolvedRoot);
+      const resolvedRoot = normalizePath(path.resolve(rp));
+      return normalizedResolved.startsWith(resolvedRoot);
     }) || rootPaths[0];
 
     try {
@@ -126,8 +127,9 @@ export async function filesRoutes(app: FastifyInstance) {
         .sort((a, b) => a.name.localeCompare(b.name));
 
       // 判断是否在根目录
-      const resolvedRoot = path.resolve(currentRoot);
-      const parentPath = resolvedPath !== resolvedRoot ? path.dirname(resolvedPath) : null;
+      const resolvedRoot = normalizePath(path.resolve(currentRoot));
+      const normalizedCurrent = normalizePath(resolvedPath);
+      const parentPath = normalizedCurrent !== resolvedRoot ? path.dirname(resolvedPath) : null;
 
       return {
         currentPath: resolvedPath,

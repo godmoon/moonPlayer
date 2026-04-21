@@ -156,6 +156,20 @@ pm2 startup && pm2 save
 | `HOST`     | 0.0.0.0     | 监听地址 |
 | `NODE_ENV` | development | 运行模式 |
 
+### 修改端口
+
+**Linux/Mac (PM2):**
+1. 修改 `server/ecosystem.config.json` 中的 `env.PORT`
+2. 或命令行：`PORT=3001 pm2 start ...`
+
+**Windows (EXE):**
+1. 修改 `start.bat`，添加 `set PORT=3001`
+2. 或命令行启动：`set PORT=3001 && moonplayer-server.exe`
+
+**其他需调整的位置：**
+- 前端开发代理（如有）：`web/vite.config.ts` 中的 proxy target
+- 文档示例：README.md 中的 `localhost:3000` 示例 URL
+
 ### 音乐目录
 
 ```bash

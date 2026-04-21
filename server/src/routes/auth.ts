@@ -2,6 +2,8 @@
 import type { FastifyPluginCallback } from 'fastify';
 import {
   getDatabase,
+  saveDatabase,
+  normalizePath,
   needsAdminSetup,
   setupAdmin,
   verifyAdminPassword,

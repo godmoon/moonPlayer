@@ -1,6 +1,6 @@
 // 跳转历史路由（用于学习片头片尾）
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 
 export async function skipRoutes(app: FastifyInstance) {
   const db = getDatabase();

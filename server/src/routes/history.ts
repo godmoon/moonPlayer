@@ -1,6 +1,6 @@
 // 播放历史路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 
 export async function historyRoutes(app: FastifyInstance) {
   const db = getDatabase();

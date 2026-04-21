@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { createClient } from 'webdav';
 import type { WebDAVClient } from 'webdav';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';

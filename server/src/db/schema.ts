@@ -1,35 +1,176 @@
 // 数据库 Schema 和初始化
-import Database from 'better-sqlite3';
+import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import path from 'path';
+import fs from 'fs';
 import { appPath } from '../utils/path.js';
 import crypto from 'crypto';
+import { getDirname, getWasmPath } from '../utils/runtime.js';
 
-let db: Database.Database | null = null;
+// 当前目录
+const __dirname = getDirname();
 
-export function getDatabase(): Database.Database {
-  if (!db) {
-    const dbPath = path.join(appPath, 'moonplayer.db');
-    db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
-    initDatabase(db);
-    migrateDatabase(db);
+// sql.js 数据库实例
+let db: SqlJsDatabase | null = null;
+let dbPath: string = '';
+
+// 路径标准化（Windows 兼容）
+export function normalizePath(p: string): string {
+  // 统一使用正斜杠
+  return p.replace(/\\/g, '/');
+}
+
+// 将查询结果转换为数组
+function resultsToArray(results: any[]): any[] {
+  if (!results || results.length === 0) return [];
+  // sql.js exec 返回 [{columns: string[], values: any[][]}]
+  const result = results[0];
+  if (!result || !result.columns || !result.values) return [];
+  return result.values.map((row: any[]) => {
+    const obj: Record<string, any> = {};
+    result.columns.forEach((col: string, i: number) => {
+      obj[col] = row[i];
+    });
+    return obj;
+  });
+}
+
+// 封装 better-sqlite3 兼容的 API
+class DatabaseWrapper {
+  private db: SqlJsDatabase;
+  
+  constructor(db: SqlJsDatabase) {
+    this.db = db;
   }
-  return db;
+  
+  // 执行 SQL（无返回）
+  exec(sql: string): void {
+    this.db.run(sql);
+    // 写入后自动保存
+    this.save();
+  }
+  
+  // 准备语句
+  prepare(sql: string): StatementWrapper {
+    return new StatementWrapper(this.db, sql, this);
+  }
+  
+  // 关闭数据库
+  close(): void {
+    // sql.js 需要手动保存
+    this.save();
+  }
+  
+  // 保存到文件
+  save(): void {
+    if (dbPath) {
+      const data = this.db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(dbPath, buffer);
+    }
+  }
 }
 
-// 密码哈希工具
-export function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
-  const s = salt || crypto.randomBytes(32).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, s, 100000, 64, 'sha512').toString('hex');
-  return { hash, salt: s };
+// 语句封装
+class StatementWrapper {
+  private db: SqlJsDatabase;
+  private sql: string;
+  private wrapper: DatabaseWrapper;
+  
+  constructor(db: SqlJsDatabase, sql: string, wrapper: DatabaseWrapper) {
+    this.db = db;
+    this.sql = sql;
+    this.wrapper = wrapper;
+  }
+  
+  // 执行并返回所有结果
+  all(...params: any[]): any[] {
+    const results = this.db.exec(this.sql, params);
+    return resultsToArray(results);
+  }
+  
+  // 执行并返回第一行
+  get(...params: any[]): any | undefined {
+    const results = this.db.exec(this.sql, params);
+    const arr = resultsToArray(results);
+    return arr.length > 0 ? arr[0] : undefined;
+  }
+  
+  // 执行并返回变化信息
+  run(...params: any[]): { changes: number; lastInsertRowid: number } {
+    this.db.run(this.sql, params);
+    const info = this.db.exec("SELECT changes() as changes, last_insert_rowid() as lastInsertRowid");
+    const arr = resultsToArray(info);
+    // 写入后自动保存
+    this.wrapper.save();
+    return arr.length > 0 ? { changes: arr[0].changes as number, lastInsertRowid: arr[0].lastInsertRowid as number } : { changes: 0, lastInsertRowid: 0 };
+  }
 }
 
-export function verifyPassword(password: string, hash: string, salt: string): boolean {
-  const result = hashPassword(password, salt);
-  return result.hash === hash;
+// 数据库类型
+type Database = DatabaseWrapper;
+
+export function getDatabase(): Database {
+  if (!db) {
+    throw new Error('Database not initialized. Call initDatabase() first.');
+  }
+  return new DatabaseWrapper(db);
 }
 
-function initDatabase(db: Database.Database) {
+// 初始化数据库（异步）
+export async function initDatabaseAsync(): Promise<void> {
+  if (db) return;
+  
+  // 获取 WASM 文件路径
+  const wasmPath = getWasmPath();
+  
+  if (!fs.existsSync(wasmPath)) {
+    throw new Error('sql-wasm.wasm not found. Please ensure sql.js is installed.');
+  }
+  
+  // 读取 WASM 文件
+  const buffer = fs.readFileSync(wasmPath);
+  const wasmBinary = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  
+  const SQL = await initSqlJs({
+    locateFile: (file: string) => {
+      // 返回空字符串，使用 wasmBinary
+      return '';
+    },
+    wasmBinary
+  });
+  
+  dbPath = path.join(appPath, 'moonplayer.db');
+  
+  // 确保目录存在
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  
+  // 尝试加载现有数据库
+  if (fs.existsSync(dbPath)) {
+    const buffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
+  }
+  
+  // 初始化表结构
+  const database = new DatabaseWrapper(db);
+  initTables(database);
+  migrateDatabase(database);
+  
+  // 保存初始状态
+  database.save();
+}
+
+// 同步初始化（兼容旧代码，但需要先调用 initDatabaseAsync）
+function initDatabase(database: Database) {
+  initTables(database);
+  migrateDatabase(database);
+}
+
+function initTables(db: Database) {
   // 音轨表
   db.exec(`
     CREATE TABLE IF NOT EXISTS tracks (
@@ -63,24 +204,27 @@ function initDatabase(db: Database.Database) {
     )
   `);
 
-  // 播放列表项表 - 定义播放列表的来源（目录/文件）
+  // 播放列表项表
   db.exec(`
     CREATE TABLE IF NOT EXISTS playlist_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       playlist_id INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('directory', 'file', 'filter')),
+      type TEXT NOT NULL CHECK(type IN ('directory', 'file', 'filter', 'match')),
       path TEXT NOT NULL,
       include_subdirs INTEGER DEFAULT 0,
       filter_regex TEXT,
       filter_artist TEXT,
       filter_album TEXT,
       filter_title TEXT,
+      match_field TEXT,
+      match_op TEXT,
+      match_value TEXT,
       "order" INTEGER DEFAULT 0,
       FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
     )
   `);
 
-  // 播放列表音轨表 - 存储播放列表中的实际音轨
+  // 播放列表音轨表
   db.exec(`
     CREATE TABLE IF NOT EXISTS playlist_tracks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,7 +250,7 @@ function initDatabase(db: Database.Database) {
     )
   `);
 
-  // 跳转历史表（用于学习片头片尾）
+  // 跳转历史表
   db.exec(`
     CREATE TABLE IF NOT EXISTS skip_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,7 +282,7 @@ function initDatabase(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_skip_history_track ON skip_history(track_id);
   `);
 
-  // 创建 WebDAV 配置表
+  // WebDAV 配置表
   db.exec(`
     CREATE TABLE IF NOT EXISTS webdav_configs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,7 +296,7 @@ function initDatabase(db: Database.Database) {
     )
   `);
 
-  // 创建管理员表
+  // 管理员表
   db.exec(`
     CREATE TABLE IF NOT EXISTS admin (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -164,7 +308,7 @@ function initDatabase(db: Database.Database) {
     )
   `);
 
-  // 创建会话表（用于记住登录状态）
+  // 会话表
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,7 +318,7 @@ function initDatabase(db: Database.Database) {
     )
   `);
 
-  // 创建登录尝试表（用于限制暴力破解）
+  // 登录尝试表
   db.exec(`
     CREATE TABLE IF NOT EXISTS login_attempts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,9 +345,8 @@ function initDatabase(db: Database.Database) {
     ['nav_order', 'browse,playlists,current,history,ratings,settings']
   ];
 
-  const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of defaultSettings) {
-    insertSetting.run(key, value);
+    db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run(key, value);
   }
 
   // 创建默认"我喜欢的歌"播放列表
@@ -217,10 +360,24 @@ function initDatabase(db: Database.Database) {
     );
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('favorites_playlist_id', String(result.lastInsertRowid));
   }
+  
+  // 来源条件表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS playlist_item_conditions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      match_field TEXT NOT NULL,
+      match_op TEXT NOT NULL,
+      match_value TEXT NOT NULL,
+      "order" INTEGER DEFAULT 0,
+      FOREIGN KEY (item_id) REFERENCES playlist_items(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_item_conditions_item ON playlist_item_conditions(item_id)`);
 }
 
-// 数据库迁移（新增字段）
-function migrateDatabase(db: Database.Database) {
+// 数据库迁移
+function migrateDatabase(db: Database) {
   // 检查并添加 playlists 表的新字段
   const playlistsInfo = db.prepare('PRAGMA table_info(playlists)').all() as { name: string }[];
   const playlistsColumns = playlistsInfo.map(c => c.name);
@@ -251,100 +408,15 @@ function migrateDatabase(db: Database.Database) {
   if (!itemsColumns.includes('filter_title')) {
     db.exec('ALTER TABLE playlist_items ADD COLUMN filter_title TEXT');
   }
-  // 匹配类型播放列表新字段
   if (!itemsColumns.includes('match_field')) {
-    db.exec('ALTER TABLE playlist_items ADD COLUMN match_field TEXT'); // rating, duration, year, artist, filename, tags
+    db.exec('ALTER TABLE playlist_items ADD COLUMN match_field TEXT');
   }
   if (!itemsColumns.includes('match_op')) {
-    db.exec('ALTER TABLE playlist_items ADD COLUMN match_op TEXT'); // >, <, >=, <=, =, contains, not_contains
+    db.exec('ALTER TABLE playlist_items ADD COLUMN match_op TEXT');
   }
   if (!itemsColumns.includes('match_value')) {
-    db.exec('ALTER TABLE playlist_items ADD COLUMN match_value TEXT'); // 比较值
+    db.exec('ALTER TABLE playlist_items ADD COLUMN match_value TEXT');
   }
-
-  // 创建 playlist_tracks 表（如果不存在）
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS playlist_tracks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      playlist_id INTEGER NOT NULL,
-      track_id INTEGER NOT NULL,
-      "order" INTEGER DEFAULT 0,
-      FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-      FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE,
-      UNIQUE(playlist_id, track_id)
-    )
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id)`);
-
-  // 创建来源条件表（支持 AND 条件）
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS playlist_item_conditions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      item_id INTEGER NOT NULL,
-      match_field TEXT NOT NULL,
-      match_op TEXT NOT NULL,
-      match_value TEXT NOT NULL,
-      "order" INTEGER DEFAULT 0,
-      FOREIGN KEY (item_id) REFERENCES playlist_items(id) ON DELETE CASCADE
-    )
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_item_conditions_item ON playlist_item_conditions(item_id)`);
-
-  // 迁移 playlist_items 表的 CHECK 约束，添加 'match' 类型
-  try {
-    // 检查约束是否包含 'match'
-    const itemsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='playlist_items'").get() as { sql: string } | undefined;
-    if (itemsSql && !itemsSql.sql.includes("'match'")) {
-      // 需要重建表来更新约束
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS playlist_items_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          playlist_id INTEGER NOT NULL,
-          type TEXT NOT NULL CHECK(type IN ('directory', 'file', 'filter', 'match')),
-          path TEXT NOT NULL,
-          include_subdirs INTEGER DEFAULT 0,
-          filter_regex TEXT,
-          filter_artist TEXT,
-          filter_album TEXT,
-          filter_title TEXT,
-          match_field TEXT,
-          match_op TEXT,
-          match_value TEXT,
-          "order" INTEGER DEFAULT 0,
-          FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
-        )
-      `);
-      db.exec(`
-        INSERT INTO playlist_items_new 
-        SELECT id, playlist_id, type, path, include_subdirs, filter_regex, filter_artist, filter_album, filter_title, 
-               COALESCE(match_field, NULL) as match_field, 
-               COALESCE(match_op, NULL) as match_op, 
-               COALESCE(match_value, NULL) as match_value, 
-               "order"
-        FROM playlist_items
-      `);
-      db.exec(`DROP TABLE playlist_items`);
-      db.exec(`ALTER TABLE playlist_items_new RENAME TO playlist_items`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items(playlist_id)`);
-    }
-  } catch (err) {
-    // 迁移失败时静默忽略，表结构可能已是最新
-    console.error('playlist_items CHECK 约束迁移失败:', err);
-  }
-
-  // 创建 playlist_item_conditions 表（如果不存在）
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS playlist_item_conditions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      item_id INTEGER NOT NULL,
-      match_field TEXT NOT NULL,
-      match_op TEXT NOT NULL,
-      match_value TEXT NOT NULL,
-      "order" INTEGER DEFAULT 0,
-      FOREIGN KEY (item_id) REFERENCES playlist_items(id) ON DELETE CASCADE
-    )
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_item_conditions_item ON playlist_item_conditions(item_id)`);
 
   // 检查并添加 tracks 表的新字段
   const tracksInfo = db.prepare('PRAGMA table_info(tracks)').all() as { name: string }[];
@@ -363,8 +435,19 @@ function migrateDatabase(db: Database.Database) {
     db.exec('ALTER TABLE tracks ADD COLUMN recycled_at INTEGER');
   }
 
-  // 创建回收站索引
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tracks_recycled ON tracks(recycled)`);
+}
+
+// 密码哈希工具
+export function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+  const s = salt || crypto.randomBytes(32).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, s, 100000, 64, 'sha512').toString('hex');
+  return { hash, salt: s };
+}
+
+export function verifyPassword(password: string, hash: string, salt: string): boolean {
+  const result = hashPassword(password, salt);
+  return result.hash === hash;
 }
 
 // 检查是否需要初始化管理员
@@ -378,13 +461,11 @@ export function needsAdminSetup(): boolean {
 export function setupAdmin(username: string, password: string): { success: boolean; error?: string } {
   const database = getDatabase();
   
-  // 检查是否已有管理员
   const existing = database.prepare('SELECT id FROM admin WHERE id = 1').get();
   if (existing) {
     return { success: false, error: '管理员已存在' };
   }
   
-  // 密码强度检查
   if (password.length < 6) {
     return { success: false, error: '密码至少需要6个字符' };
   }
@@ -396,6 +477,9 @@ export function setupAdmin(username: string, password: string): { success: boole
     INSERT INTO admin (id, username, password_hash, password_salt, created_at, updated_at)
     VALUES (1, ?, ?, ?, ?, ?)
   `).run(username, hash, salt, now, now);
+  
+  // 保存数据库
+  database.save();
   
   return { success: true };
 }
@@ -410,7 +494,7 @@ export function verifyAdminPassword(password: string): boolean {
   return verifyPassword(password, admin.password_hash, admin.password_salt);
 }
 
-// 验证管理员用户名和密码
+// 验证管理员凭据
 export function verifyAdminCredentials(username: string, password: string): { success: boolean; error?: string } {
   const database = getDatabase();
   const admin = database.prepare('SELECT username, password_hash, password_salt FROM admin WHERE id = 1').get() as { username: string; password_hash: string; password_salt: string } | undefined;
@@ -434,12 +518,10 @@ export function verifyAdminCredentials(username: string, password: string): { su
 export function changeAdminPassword(oldPassword: string, newPassword: string): { success: boolean; error?: string } {
   const database = getDatabase();
   
-  // 验证原密码
   if (!verifyAdminPassword(oldPassword)) {
     return { success: false, error: '原密码错误' };
   }
   
-  // 密码强度检查
   if (newPassword.length < 6) {
     return { success: false, error: '新密码至少需要6个字符' };
   }
@@ -451,31 +533,33 @@ export function changeAdminPassword(oldPassword: string, newPassword: string): {
     UPDATE admin SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = 1
   `).run(hash, salt, now);
   
+  database.save();
+  
   return { success: true };
 }
 
-// 清除管理员密码（保留其他数据）
+// 清除管理员密码
 export function clearAdminPassword(): { success: boolean; error?: string } {
   const database = getDatabase();
   
-  // 清除管理员
   database.prepare('DELETE FROM admin WHERE id = 1').run();
-  
-  // 清除所有会话
   database.prepare('DELETE FROM sessions').run();
+  
+  database.save();
   
   return { success: true };
 }
 
-// 创建会话 token
+// 创建会话
 export function createSession(): string {
   const database = getDatabase();
   const token = crypto.randomBytes(64).toString('hex');
   const now = Date.now();
-  // 会话有效期：1年
   const expiresAt = now + 365 * 24 * 60 * 60 * 1000;
   
   database.prepare('INSERT INTO sessions (token, created_at, expires_at) VALUES (?, ?, ?)').run(token, now, expiresAt);
+  
+  database.save();
   
   return token;
 }
@@ -489,8 +573,8 @@ export function validateSession(token: string): boolean {
   
   if (!session) return false;
   if (session.expires_at < now) {
-    // 清除过期会话
     database.prepare('DELETE FROM sessions WHERE id = ?').run(session.id);
+    database.save();
     return false;
   }
   
@@ -502,6 +586,7 @@ export function cleanExpiredSessions(): void {
   const database = getDatabase();
   const now = Date.now();
   database.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+  database.save();
 }
 
 // 记录登录尝试
@@ -509,23 +594,22 @@ export function recordLoginAttempt(ip: string, success: boolean): void {
   const database = getDatabase();
   const now = Date.now();
   database.prepare('INSERT INTO login_attempts (ip, attempt_at, success) VALUES (?, ?, ?)').run(ip, now, success ? 1 : 0);
+  database.save();
 }
 
-// 获取等待时间（秒）
+// 获取等待时间
 export function getLoginWaitTime(ip: string): number {
   const database = getDatabase();
   const now = Date.now();
   
-  // 清理旧的尝试记录（超过1小时的）
   database.prepare('DELETE FROM login_attempts WHERE attempt_at < ?').run(now - 3600000);
   
-  // 获取最近1小时内的失败次数
   const result = database.prepare(`
     SELECT COUNT(*) as count FROM login_attempts 
     WHERE ip = ? AND success = 0 AND attempt_at > ?
-  `).get(ip, now - 3600000) as { count: number };
+  `).get(ip, now - 3600000) as { count: number } | undefined;
   
-  const failedCount = result.count;
+  const failedCount = result?.count || 0;
   
   if (failedCount === 0) return 0;
   if (failedCount < 3) return 0;
@@ -535,12 +619,22 @@ export function getLoginWaitTime(ip: string): number {
   if (failedCount < 15) return 120;
   if (failedCount < 20) return 300;
   if (failedCount < 30) return 600;
-  return 3600; // 最高1小时
+  return 3600;
 }
 
+// 保存数据库
+export function saveDatabase(): void {
+  if (db) {
+    const database = new DatabaseWrapper(db);
+    database.save();
+  }
+}
+
+// 关闭数据库
 export function closeDatabase() {
   if (db) {
-    db.close();
+    const database = new DatabaseWrapper(db);
+    database.save();
     db = null;
   }
 }

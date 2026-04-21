@@ -115,12 +115,12 @@ function App() {
 
   // 需要初始化
   if (authState === 'needSetup') {
-    return <Setup onSuccess={() => setAuthState('authenticated')} />;
+    return <Setup onSuccess={checkAuth} />;
   }
 
   // 需要登录
   if (authState === 'needLogin') {
-    return <Login onSuccess={() => setAuthState('authenticated')} />;
+    return <Login onSuccess={checkAuth} />;
   }
 
   // 已登录

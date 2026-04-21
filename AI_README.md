@@ -6,93 +6,83 @@ Web 端音乐播放器，支持多种播放模式、评分系统、WebDAV 远程
 
 ## 技术栈
 
-- **后端**: Node.js + Fastify + SQLite (better-sqlite3)
+- **后端**: Node.js + Fastify + sql.js (SQLite WASM)
 - **前端**: React + Vite + Tailwind CSS + Zustand
 - **音频**: HTML5 Audio API + Media Session API
-- **Android**: WebView 容器 + MediaSession 通知栏控制
 
 ## 关键文件
 
 ### 后端 (server/)
-- `src/index.ts` - 服务入口 + 鉴权中间件
-- `src/routes/auth.ts` - 登录/登出/会话管理
+- `src/index.ts` - 服务入口 + 鉴权中间件 + 路径兼容处理
 - `src/routes/stream.ts` - 音频流传输（含品质转码）
-- `src/routes/tracks.ts` - 音轨 API
-- `src/db/schema.ts` - 数据库 Schema
+- `src/routes/tracks.ts` - 音轨 API + AI 标签
+- `src/db/schema.ts` - 数据库 Schema（sql.js）
 
 ### 前端 (web/)
-- `src/App.tsx` - 主应用入口
 - `src/stores/playerStore.ts` - 播放器状态
-- `src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件（含快进/快退逻辑）
-- `src/components/AudioPlayer/utils.ts` - 播放器工具函数
+- `src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件
 
-### Android (android/)
-- `app/src/main/java/com/moon/moonplayer/MainActivity.java` - WebView 主页面 + 通知栏控制
-- `app/src/main/java/com/moon/moonplayer/ConnectActivity.java` - 启动页，输入服务器地址
-- `app/src/main/res/drawable/ic_forward.xml` - 前进按钮图标
-- `app/src/main/res/drawable/ic_backward.xml` - 后退按钮图标
-
-## Android 通知栏控制
-
-通知栏按钮顺序：后退 ← 上一曲 ← 播放/暂停 → 下一曲 → 前进
-
-按钮通过 `MoonPlayerBridge` 与 WebView 通信：
-- `forward()` - 快进（递增跳转：5→10→30→60→120秒）
-- `backward()` - 快退（递增跳转：5→10→30→60→120秒）
-- `next()` / `prev()` - 切换曲目
-
-## 快进/快退递增逻辑
-
-短时间（<3秒）内连续点击快进/快退，跳转时间会递增：
-- 第一次：5秒
-- 第二次：10秒
-- 第三次：30秒
-- 第四次：60秒
-- 第五次：120秒
-
-3秒后重置为 5 秒。
+### Windows 打包 (windows/)
+- `build-exe.bat` - Windows EXE 打包脚本（双击运行）
 
 ## 常用命令
 
 ```bash
-# 后端
-cd server && npm run build && pm2 restart moonplayer-server
+cd server && npm run dev          # 后端开发（热重载）
+cd server && npm run build        # 后端 TypeScript 编译
+cd web && npm run build           # 前端构建
+pm2 restart moonplayer-server     # 重启服务
+```
 
-# 前端
-cd web && npm run build
+## Windows 打包要点
 
-# Android APK
-cd android && bash build-local.sh
-# 输出: android/moonplayer-debug.apk
+### 1. ESM/CJS 兼容性
+
+打包时 esbuild 用 `--define:import.meta.url=undefined` 将 ESM 转为 CJS，代码必须检查 `import.meta.url` 是有效字符串后再调用 `fileURLToPath()`：
+
+```typescript
+// 正确写法
+if (typeof import.meta === 'object' && import.meta.url && typeof import.meta.url === 'string') {
+  fileURLToPath(import.meta.url);  // 安全
+}
+```
+
+**需要此检查的文件：**
+- `server/src/index.ts`
+- `server/src/routes/tracks.ts`
+- `server/src/utils/runtime.ts`
+
+### 2. FFmpeg/FFprobe 路径
+
+Windows 上需要检测 ffmpeg/ffprobe 位置：
+- 优先从 EXE 同目录加载 `ffmpeg.exe` / `ffprobe.exe`
+- 其次使用系统 PATH
+- 工具函数：`src/utils/ffmpeg.ts` 的 `getFfmpegPath()` / `getFfprobePath()`
+
+### 3. WASM 文件路径
+
+sql.js 的 WASM 文件路径由 `src/utils/runtime.ts` 的 `getWasmPath()` 处理：
+- pkg 打包后内嵌路径：`/snapshot/moonPlayer/server/dist/sql-wasm.wasm`
+- 外部文件：EXE 同目录的 `sql-wasm.wasm`
+
+### 4. 发布目录结构
+
+```
+moonplayer/
+├── moonplayer-server.exe  # 主程序
+├── sql-wasm.wasm          # SQLite WASM（必需）
+├── web/dist/              # 前端资源
+├── ffmpeg.exe             # 可选，转码需要
+├── ffprobe.exe            # 可选，音频信息获取
+└── start.bat              # 启动脚本
 ```
 
 ## 数据存储
 
 - 数据库: `~/.moonplayer/moonplayer.db`
-- 日志: `~/.moonplayer/logs/`
-- WebDAV 缓存: `~/.moonplayer/webdav_cache/`
-- 转码缓存: `~/.moonplayer/transcode_cache/`
+- 缓存: `~/.moonplayer/transcode_cache/`, `~/.moonplayer/webdav_cache/`
 
-## 播放模式
+## 品质/播放模式
 
-| 模式 | 说明 |
-|------|------|
-| `sequential` | 顺序播放 |
-| `shuffle` | 随机播放（可重复） |
-| `weighted` | 权重随机（按评分加权） |
-| `random` | 乱序（打乱后顺序播放） |
-| `single-loop` | 单曲循环 |
-
-## 品质模式
-
-| 模式 | 码率 |
-|------|------|
-| `low` | 120k |
-| `medium` | 192k |
-| `high` | 320k |
-| `lossless` | 无损 |
-
-## 格式支持
-
-- 原生支持: MP3, M4A, OGG, WAV
-- 自动转码: FLAC, WMA, APE, AAC (需要 FFmpeg)
+- 品质: `low`(120k) / `medium`(192k) / `high`(320k) / `lossless`
+- 播放: 顺序 / 随机 / 权重随机 / 乱序 / 单曲循环

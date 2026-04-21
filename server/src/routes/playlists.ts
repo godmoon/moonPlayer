@@ -1,6 +1,6 @@
 // 播放列表路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 import { parseFile } from 'music-metadata';
 import fs from 'fs';
 import path from 'path';

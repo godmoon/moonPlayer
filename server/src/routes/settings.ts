@@ -1,6 +1,6 @@
 // 设置路由
 import type { FastifyPluginCallback } from 'fastify';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 import { updateTranscodeFormats } from '../utils/webdavCache.js';
 
 // 默认导航项顺序

@@ -5,7 +5,8 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getFfmpegPath, getFfprobePath, checkFfmpegAvailable } from '../utils/ffmpeg.js';
 import { parseFile } from 'music-metadata';
 import {
   ensureCacheDir,
@@ -307,7 +308,7 @@ function getQualityTranscodeCachePath(sourcePath: string, cacheKey: string): str
 // 获取音频文件比特率
 async function getAudioBitrate(filePath: string): Promise<number> {
   return new Promise((resolve) => {
-    const ffprobe = spawn('ffprobe', [
+    const ffprobe = spawn(getFfprobePath(), [
       '-v', 'quiet',
       '-show_entries', 'format=bit_rate',
       '-of', 'default=noprint_wrappers=1:nokey=1',
@@ -346,7 +347,7 @@ function transcodeWithBitrate(filePath: string, outputPath: string, bitrate: num
       outputPath
     ];
     
-    const ffmpeg = spawn('ffmpeg', args);
+    const ffmpeg = spawn(getFfmpegPath(), args);
     
     let stderr = '';
     ffmpeg.stderr.on('data', (data) => {
@@ -397,7 +398,7 @@ async function getLocalFileDuration(filePath: string): Promise<number | null> {
 // 使用 ffprobe 获取时长
 async function getDurationViaFfprobe(filePath: string): Promise<number | null> {
   return new Promise((resolve) => {
-    const ffprobe = spawn('ffprobe', [
+    const ffprobe = spawn(getFfprobePath(), [
       '-v', 'quiet',
       '-show_entries', 'format=duration',
       '-of', 'default=noprint_wrappers=1:nokey=1',
@@ -471,7 +472,7 @@ async function getWebdavDurationViaDownload(configId: number, filePath: string):
       const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
       const stream = await client.createReadStream(filePath);
       
-      const ffprobe = spawn('ffprobe', [
+      const ffprobe = spawn(getFfprobePath(), [
         '-v', 'quiet',
         '-show_entries', 'format=duration',
         '-of', 'default=noprint_wrappers=1:nokey=1',

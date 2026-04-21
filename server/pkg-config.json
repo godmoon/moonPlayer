@@ -1,0 +1,16 @@
+{
+  "name": "moonplayer-server",
+  "main": "dist/index.js",
+  "bin": "dist/index.js",
+  "pkg": {
+    "targets": ["node18-win-x64"],
+    "output": "moonplayer-server",
+    "assets": [
+      "dist/sql-wasm.wasm",
+      "../web/dist/**/*"
+    ],
+    "scripts": [
+      "dist/**/*.js"
+    ]
+  }
+}
