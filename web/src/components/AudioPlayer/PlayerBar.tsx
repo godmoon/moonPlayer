@@ -21,9 +21,12 @@ export function PlayerBar() {
     volume,
     currentPlaylist,
     sleepTimer,
+    qualityMode,
+    playlistTracks,
     setIsPlaying,
     setDuration,
     setPlayMode,
+    setCurrentTrack,
     playNext,
     playPrevious,
     deleteAndPlayNext,
@@ -113,9 +116,12 @@ useEffect(() => {
     (currentTrack.path.startsWith('webdav://') ? 
       (() => {
         const match = currentTrack.path.match(/^webdav:\/\/(\d+)(.+)$/);
-        if (match) return `/api/webdav/${match[1]}/stream?path=${encodeURIComponent(match[2])}`;
+        if (match) {
+          const baseUrl = `/api/webdav/${match[1]}/stream?path=${encodeURIComponent(match[2])}`;
+          return qualityMode !== 'lossless' ? `${baseUrl}&quality=${qualityMode}` : baseUrl;
+        }
         return null;
-      })() : getStreamUrl(currentTrack.id)) 
+      })() : getStreamUrl(currentTrack.id, qualityMode)) 
     : null;
 
   // 播放状态同步
@@ -405,24 +411,83 @@ const handlePlayWrapped = useCallback(() => {
     };
   }, [currentTrack, isPlaying, handlePlay, handlePause, handlePreviousOrNext, getAudio]);
 
-  // 快进快退
+  // 快进快退（支持跨文件跳转）
   const handleSkipForward = useCallback(() => {
     const audio = getAudio();
-    if (!audio) return;
-    audio.currentTime = Math.min(audio.currentTime + skipAmounts.forward, audio.duration || 0);
+    if (!audio || !currentTrack) return;
+    
+    const currentTime = audio.currentTime;
+    const duration = audio.duration || 0;
+    const newTime = currentTime + skipAmounts.forward;
+    
+    // 如果跳转后超出当前文件，切换到下一曲
+    if (newTime >= duration - 0.5 && duration > 0) {
+      // 顺序播放模式下切换到下一曲，从头开始播放
+      if (playMode === 'sequential' && playlistTracks.length > 0) {
+        const currentIndex = playlistTracks.findIndex(t => t.id === currentTrack.id);
+        const nextIndex = (currentIndex + 1) % playlistTracks.length;
+        setCurrentTrack(playlistTracks[nextIndex]);
+        // 不设置 pendingSeekPosition，从头播放
+      } else {
+        // 非顺序模式，用原来的 playNext
+        playNext();
+      }
+    } else {
+      // 正常跳转
+      audio.currentTime = Math.min(newTime, duration - 0.5);
+    }
+    
     const i = SKIP_AMOUNTS.indexOf(skipAmounts.forward);
     setSkipAmounts(p => ({ ...p, forward: i < SKIP_AMOUNTS.length-1 ? SKIP_AMOUNTS[i+1] : 120 }));
     setTimeout(() => setSkipAmounts(p => ({ ...p, forward: 5 })), 3000);
-  }, [skipAmounts.forward, getAudio]);
+  }, [skipAmounts.forward, currentTrack, playMode, playlistTracks, getAudio, playNext, setCurrentTrack]);
 
   const handleSkipBackward = useCallback(() => {
     const audio = getAudio();
-    if (!audio) return;
-    audio.currentTime = Math.max(audio.currentTime - skipAmounts.backward, 0);
+    if (!audio || !currentTrack) return;
+    
+    const currentTime = audio.currentTime;
+    const newTime = currentTime - skipAmounts.backward;
+    
+    // 如果跳转后小于 0，需要切换到上一曲
+    if (newTime < 0 && playMode === 'sequential' && playlistTracks.length > 0) {
+      const currentIndex = playlistTracks.findIndex(t => t.id === currentTrack.id);
+      const prevIndex = currentIndex <= 0 ? playlistTracks.length - 1 : currentIndex - 1;
+      const prevTrack = playlistTracks[prevIndex];
+      
+      // 计算上一曲应该从什么位置开始
+      // 从当前曲往前跳 skipAmounts.backward 秒
+      // 例如：当前 115 的 00:30，往前跳 120 秒
+      // 实际位置应该是上一曲末尾往前推 (120 - 30) = 90 秒
+      const seekFromEnd = skipAmounts.backward - currentTime;
+      
+      // 获取上一曲的时长（如果有）
+      const prevDuration = prevTrack.duration || 0;
+      
+      if (prevDuration > 0 && seekFromEnd < prevDuration) {
+        // 上一曲够长，从末尾往前推
+        const seekPosition = prevDuration - seekFromEnd;
+        setPendingSeekPosition(seekPosition);
+      } else if (prevDuration > 0 && seekFromEnd >= prevDuration) {
+        // 上一曲不够长，最多跳过一个文件
+        // 直接从 00:00 开始
+        setPendingSeekPosition(0);
+      } else {
+        // 没有时长信息，从头开始
+        setPendingSeekPosition(0);
+      }
+      
+      setCurrentTrack(prevTrack);
+      setIsPlaying(true); // 确保播放状态
+    } else {
+      // 正常跳转
+      audio.currentTime = Math.max(newTime, 0);
+    }
+    
     const i = SKIP_AMOUNTS.indexOf(skipAmounts.backward);
     setSkipAmounts(p => ({ ...p, backward: i < SKIP_AMOUNTS.length-1 ? SKIP_AMOUNTS[i+1] : 120 }));
     setTimeout(() => setSkipAmounts(p => ({ ...p, backward: 5 })), 3000);
-  }, [skipAmounts.backward, getAudio]);
+  }, [skipAmounts.backward, currentTrack, playMode, playlistTracks, getAudio, setCurrentTrack, setIsPlaying]);
 
   // 删除并下一曲
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -465,12 +530,16 @@ const handlePlayWrapped = useCallback(() => {
 
   if (currentTrack) {
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 px-2 md:px-6 py-4 z-50 pb-[env(safe-area-inset-bottom)]">
+    <div className="bg-gray-900 border-t border-gray-800 px-2 md:px-4 py-3 flex-shrink-0"
+      style={{
+        paddingBottom: 'env(safe-area-inset-bottom)',
+      }}
+    >
       {/* 全端统一布局 */}
       <div className="flex flex-col gap-3 w-full">
         {/* 歌名 */}
         <div className="text-white font-medium text-base truncate">
-          {currentTrack && formatTrackTitle(currentTrack)}
+          {currentTrack && formatTrackTitle(currentTrack, qualityMode)}
         </div>
 
         {/* 按钮栏 - 两行布局 */}

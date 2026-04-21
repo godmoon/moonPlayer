@@ -153,6 +153,93 @@ export async function trackRoutes(app: FastifyInstance) {
     return { success: true, ratingDelta };
   });
 
+  // 获取所有音轨（搜索为空时使用，限制100条）
+  app.get('/api/tracks/all', async (req, reply) => {
+    const tracks = db.prepare(`
+      SELECT * FROM tracks 
+      WHERE recycled = 0
+      ORDER BY title
+      LIMIT 100
+    `).all();
+
+    return { tracks };
+  });
+
+  // 按筛选条件获取音轨（服务端筛选）
+  app.post('/api/tracks/filter-by-conditions', async (req, reply) => {
+    const { conditions } = req.body as { 
+      conditions: Array<{ match_field: string; match_op: string; match_value: string }> 
+    };
+
+    if (!conditions || conditions.length === 0) {
+      // 无条件返回全部（最多100条）
+      const tracks = db.prepare(`
+        SELECT * FROM tracks 
+        WHERE recycled = 0
+        ORDER BY title
+        LIMIT 100
+      `).all();
+      return { tracks };
+    }
+
+    // 先获取所有音轨（限制10000条避免内存问题）
+    const allTracks = db.prepare(`
+      SELECT * FROM tracks 
+      WHERE recycled = 0
+      LIMIT 10000
+    `).all() as any[];
+
+    // 服务端筛选
+    const checkCondition = (track: any, cond: { match_field: string; match_op: string; match_value: string }): boolean => {
+      const fieldValue = track[cond.match_field];
+      const condValue = cond.match_value;
+      const numValue = parseFloat(condValue);
+
+      switch (cond.match_op) {
+        case '>':
+          return typeof fieldValue === 'number' && fieldValue > numValue;
+        case '<':
+          return typeof fieldValue === 'number' && fieldValue < numValue;
+        case '>=':
+          return typeof fieldValue === 'number' && fieldValue >= numValue;
+        case '<=':
+          return typeof fieldValue === 'number' && fieldValue <= numValue;
+        case '=':
+          return String(fieldValue || '') === String(condValue);
+        case 'contains':
+          if (cond.match_field === 'tags') {
+            try {
+              const tagList = track.tags ? (typeof track.tags === 'string' ? JSON.parse(track.tags) : track.tags) : [];
+              return tagList.some((t: string) => t.includes(condValue));
+            } catch { return false; }
+          }
+          return String(fieldValue || '').includes(condValue);
+        case 'not_contains':
+          if (cond.match_field === 'tags') {
+            try {
+              const tagList = track.tags ? (typeof track.tags === 'string' ? JSON.parse(track.tags) : track.tags) : [];
+              return !tagList.some((t: string) => t.includes(condValue));
+            } catch { return true; }
+          }
+          return !String(fieldValue || '').includes(condValue);
+        default:
+          return false;
+      }
+    };
+
+    // 所有条件都必须满足 (AND)
+    const filtered = allTracks.filter(track => {
+      for (const cond of conditions) {
+        if (!checkCondition(track, cond)) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    return { tracks: filtered };
+  });
+
   // 搜索音轨
   app.get('/api/tracks/search', async (req, reply) => {
     const { q } = req.query as { q?: string };
@@ -321,62 +408,109 @@ export async function trackRoutes(app: FastifyInstance) {
     return { tracks };
   });
 
-  // 删除音轨（从数据库）
+  // 删除音轨（标记为回收站）
   app.delete('/api/tracks/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { deleteFile } = req.query as { deleteFile?: string };
 
     const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
     if (!track) {
       return reply.code(404).send({ error: '音轨不存在' });
     }
 
-    // 如果要求删除物理文件
-    if (deleteFile === 'true') {
-      const filePath = track.path;
-      let deleteError: string | null = null;
+    // 标记为回收站
+    db.prepare('UPDATE tracks SET recycled = 1, recycled_at = ? WHERE id = ?').run(Date.now(), Number(id));
 
-      // WebDAV 文件
-      if (filePath.startsWith('webdav://')) {
-        const parsed = parseWebdavPath(filePath);
-        if (parsed) {
-          const config = getWebdavConfig(parsed.configId);
-          if (config) {
-            try {
-              const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
-              await client.deleteFile(parsed.webdavPath);
-              // 删除成功后清理缓存
-              const cachePath = getWebdavCachePath(parsed.configId, parsed.webdavPath);
-              if (fs.existsSync(cachePath)) {
-                fs.unlinkSync(cachePath);
-              }
-              const transcodePath = getTranscodeCachePath(filePath, `webdav:${parsed.configId}:`);
-              if (fs.existsSync(transcodePath)) {
-                fs.unlinkSync(transcodePath);
-              }
-            } catch (err) {
-              deleteError = `WebDAV 删除失败: ${(err as Error).message}`;
+    return { success: true };
+  });
+
+  // 从所有播放列表中移除该音轨（回收站文件不参与播放）
+  app.delete('/api/tracks/:id/remove-from-playlists', async (req, reply) => {
+    const { id } = req.params as { id: string };
+
+    db.prepare('DELETE FROM playlist_tracks WHERE track_id = ?').run(Number(id));
+    db.prepare('DELETE FROM play_history WHERE track_id = ?').run(Number(id));
+    db.prepare('DELETE FROM skip_history WHERE track_id = ?').run(Number(id));
+
+    return { success: true };
+  });
+
+  // 获取回收站音轨列表
+  app.get('/api/tracks/recycled', async (req, reply) => {
+    const tracks = db.prepare(`
+      SELECT * FROM tracks
+      WHERE recycled = 1
+      ORDER BY recycled_at DESC
+    `).all();
+
+    return { tracks };
+  });
+
+  // 恢复回收站音轨
+  app.post('/api/tracks/:id/restore', async (req, reply) => {
+    const { id } = req.params as { id: string };
+
+    const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
+    if (!track) {
+      return reply.code(404).send({ error: '音轨不存在' });
+    }
+
+    db.prepare('UPDATE tracks SET recycled = 0, recycled_at = NULL WHERE id = ?').run(Number(id));
+
+    return { success: true };
+  });
+
+  // 彻底删除音轨（删除物理文件）
+  app.delete('/api/tracks/:id/permanent', async (req, reply) => {
+    const { id } = req.params as { id: string };
+
+    const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
+    if (!track) {
+      return reply.code(404).send({ error: '音轨不存在' });
+    }
+
+    const filePath = track.path;
+    let deleteError: string | null = null;
+
+    // WebDAV 文件
+    if (filePath.startsWith('webdav://')) {
+      const parsed = parseWebdavPath(filePath);
+      if (parsed) {
+        const config = getWebdavConfig(parsed.configId);
+        if (config) {
+          try {
+            const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
+            await client.deleteFile(parsed.webdavPath);
+            // 删除成功后清理缓存
+            const cachePath = getWebdavCachePath(parsed.configId, parsed.webdavPath);
+            if (fs.existsSync(cachePath)) {
+              fs.unlinkSync(cachePath);
             }
-          } else {
-            deleteError = 'WebDAV 配置不存在';
+            const transcodePath = getTranscodeCachePath(filePath, `webdav:${parsed.configId}:`);
+            if (fs.existsSync(transcodePath)) {
+              fs.unlinkSync(transcodePath);
+            }
+          } catch (err) {
+            deleteError = `WebDAV 删除失败: ${(err as Error).message}`;
           }
         } else {
-          deleteError = '无效的 WebDAV 路径';
+          deleteError = 'WebDAV 配置不存在';
         }
       } else {
-        // 本地文件
-        try {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          }
-        } catch (err) {
-          deleteError = `文件删除失败: ${(err as Error).message}`;
+        deleteError = '无效的 WebDAV 路径';
+      }
+    } else {
+      // 本地文件
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
         }
+      } catch (err) {
+        deleteError = `文件删除失败: ${(err as Error).message}`;
       }
+    }
 
-      if (deleteError) {
-        return reply.code(500).send({ error: deleteError });
-      }
+    if (deleteError) {
+      return reply.code(500).send({ error: deleteError });
     }
 
     // 删除数据库记录
@@ -633,6 +767,77 @@ export async function trackRoutes(app: FastifyInstance) {
     }
 
     return { success: true, updated };
+  });
+
+  // =====================
+  // 播放统计 API
+  // =====================
+
+  // 获取播放次数统计
+  app.get('/api/tracks/play-stats', async (req, reply) => {
+    const { limit = 100, offset = 0, orderBy = 'play_count', order = 'DESC' } = req.query as {
+      limit?: string;
+      offset?: string;
+      orderBy?: string;
+      order?: string;
+    };
+
+    // 验证排序字段
+    const validOrderFields = ['play_count', 'title', 'artist', 'rating', 'last_played'];
+    const validOrders = ['ASC', 'DESC'];
+    
+    const sortField = validOrderFields.includes(orderBy) ? orderBy : 'play_count';
+    const sortOrder = validOrders.includes(order.toUpperCase()) ? order.toUpperCase() : 'DESC';
+
+    const tracks = db.prepare(`
+      SELECT 
+        id,
+        path,
+        title,
+        artist,
+        album,
+        play_count,
+        skip_count,
+        last_played,
+        rating
+      FROM tracks
+      WHERE recycled = 0
+      ORDER BY ${sortField} ${sortOrder}
+      LIMIT ? OFFSET ?
+    `).all(Number(limit), Number(offset)) as any[];
+
+    // 获取总数
+    const total = db.prepare('SELECT COUNT(*) as count FROM tracks WHERE recycled = 0').get() as { count: number };
+
+    return {
+      tracks,
+      total: total.count,
+      limit: Number(limit),
+      offset: Number(offset)
+    };
+  });
+
+  // 获取播放次数最多的歌曲
+  app.get('/api/tracks/most-played', async (req, reply) => {
+    const { limit = 50 } = req.query as { limit?: string };
+
+    const tracks = db.prepare(`
+      SELECT 
+        id,
+        path,
+        title,
+        artist,
+        album,
+        play_count,
+        last_played,
+        rating
+      FROM tracks
+      WHERE recycled = 0 AND play_count > 0
+      ORDER BY play_count DESC, last_played DESC
+      LIMIT ?
+    `).all(Number(limit));
+
+    return { tracks };
   });
 
   // 获取所有已存在的标签列表

@@ -1,114 +1,68 @@
 # moonPlayer AI 开发指南
+> 此文件供 AI 助手快速了解项目架构。
 
-> 此文件供 AI 助手快速了解项目架构，以便下次会话快速上手。
-
-## 项目概述
-
-Web 端音乐播放器，支持多种播放模式、评分系统、播放列表管理、WebDAV 远程存储和搜索功能。
-
-## 技术栈
-
+## 核心架构
 - **后端**: Node.js + Fastify + SQLite (better-sqlite3)
 - **前端**: React + Vite + Tailwind CSS + Zustand
-- **音频**: HTML5 Audio API + Media Session API
 
-## 核心功能
-
-### 侧边栏导航（可拖拽排序）
-- 浏览：本地文件浏览器
-- 列表：播放列表管理（整合了历史记录和当前播放功能）
-- 搜索：模糊搜索（支持拼音/首字母）
-- 评分：评分管理
-- 设置：系统设置
-
-### 播放器特性
-- 页面标题跟随当前播放歌曲变化（切换歌曲时自动更新）
-- Media Session API 支持系统媒体控制
-- 睡眠定时器（一次性/重复）
-- **手机 Edge 保活**：暂停时播放静音音频 + 保持 MediaSession.playbackState='playing'，避免浏览器销毁媒体会话
-- **理想车机适配**：检测 User-Agent 含 car/lixiang/auto/vehicle 时启用多击检测
-  - 单击（300ms延迟）：播放/暂停
-  - 双击（1.2秒内）：下一曲
-  - 三击（1.2秒内）：上一曲
-
-### 播放模式
-`sequential`(顺序) | `shuffle`(随机) | `weighted`(权重随机) | `random`(乱序) | `single-loop`(单曲循环)
-
-### 搜索功能
-- 支持 title/artist/album/path 四字段搜索
-- 前端支持拼音首字母模糊匹配
-- 点击搜索结果：自动创建父目录播放列表并播放
-
-### 播放逻辑（浏览/搜索共用）
-点击文件 → 扫描入库 → 查找/创建父目录播放列表 → 设置当前播放列表 → 播放目标曲目
-
-### 多格式原生支持
-- 前端使用 `canPlayType()` 检测浏览器支持的格式
-- 启动时将检测结果发送给后端 (`/api/settings/format-support`)
-- 后端根据检测结果决定是否转码：支持的格式直接流式传输，不支持的格式（如 WMA/APE）才转码
-- 现代浏览器普遍支持 FLAC/WAV/AAC/M4A/OGG/MP3
-- 只有 WMA/APE 等少数格式需要转码
-
-## 开发命令
-
+## 常用命令
 ```bash
-# 后端开发
-cd server && npm run dev
-
-# 前端开发
-cd web && npm run dev
-
-# 生产部署
-cd web && npm run build
-cd ../server && pm2 restart moonplayer-server
+cd server && npm run build      # 后端构建
+cd web && npm run build         # 前端构建
+pm2 restart moonplayer-server  # 重启服务
 ```
 
 ## 关键文件
-
-- `server/src/routes/stream.ts` - 音频流传输（含转码逻辑）
-- `server/src/routes/tracks.ts` - 音轨 API（含搜索）
+- `server/src/routes/tracks.ts` - 音轨 API（播放、评分、统计、搜索、筛选）
 - `server/src/routes/playlists.ts` - 播放列表 API
-- `server/src/routes/settings.ts` - 设置 API（含格式支持接收）
-- `server/src/utils/webdavCache.ts` - 转码判断逻辑（`needsTranscode`）
-- `web/src/utils/formatSupport.ts` - 浏览器格式检测（`canPlayType`）
-- `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件
-- `web/src/components/Sidebar.tsx` - 侧边栏组件
-- `web/src/components/SearchView.tsx` - 搜索组件
-- `web/src/components/FileBrowser/FileBrowser.tsx` - 文件浏览器
+- `server/src/db/schema.ts` - 数据库结构
+- `web/src/stores/playerStore.ts` - 播放器状态（含播放模式逻辑）
+- `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件（含跳转逻辑）
+- `web/src/components/SearchView.tsx` - 搜索组件（搜索+筛选）
 
-## 数据库
+## 播放模式
+| 模式 | 说明 |
+|------|------|
+| sequential | 顺序播放 |
+| shuffle | 随机播放（可重复） |
+| weighted | 权重随机（每多1分增加10%概率） |
+| random | 乱序（打乱后顺序播放） |
+| single-loop | 单曲循环 |
 
-位置: `~/.moonplayer/moonplayer.db`
+**权重随机规则**: 基础权重10，每增加1评分权重+1。
+- 评分0: 权重10（基准）
+- 评分5: 权重15（概率高50%）
+- 评分10: 权重20（概率高100%）
 
-主要表: `playlists`, `playlist_items`, `playlist_tracks`, `tracks`, `play_history`, `skip_history`
+## 评分机制
+- 完整听完 +1分
+- 快切（<10%） -1分
+- 手工评分 👍👎 按钮
 
-## 注意事项
+## 数据库核心字段 (tracks 表)
+- `play_count` - 播放次数（完整听完 +1）
+- `skip_count` - 快切次数
+- `rating` - 评分（听完 +1，快切 -1）
+- `last_played` - 最后播放时间戳
+- `recycled` - 是否在回收站
 
-1. 前端修改后需构建：`cd web && npm run build`
-2. 后端修改需重启：`pm2 restart moonplayer-server`
-3. 格式支持检测在 App.tsx 启动时自动执行
-4. **播放列表高亮更新**：
-   - `playerStore.lastPlayedPositions` 缓存实时播放位置
-   - `PlayerBar` 每20秒发送 history 后调用 `refreshTrackHistoryPosition` 更新缓存
-   - `PlaylistDetail` 从 store 读取 `lastPlayedPositions` 实现高亮和位置的实时更新
-   - 当前播放列表使用实时数据，非当前播放列表使用初始化时获取的历史数据
+## API 概览
+- `POST /api/tracks/:id/play` - 记录播放（自动更新 play_count、rating）
+- `GET /api/tracks/play-stats` - 播放统计（按播放次数排序）
+- `GET /api/tracks/most-played` - 播放最多的歌曲
+- `GET /api/tracks/tags/list` - 所有标签列表
+- `GET /api/tracks/all` - 获取所有歌曲（限制100条，用于空搜索默认显示）
+- `POST /api/tracks/filter-by-conditions` - 按筛选条件获取歌曲（服务端筛选）
+- `GET /api/tracks/search?q=关键词` - 搜索歌曲（支持拼音）
 
-## Android APP
+## 有声书跳转逻辑
+- 前进跳转超出当前文件时：切换到下一曲，从头播放
+- 后退跳转超出当前文件时：切换到上一曲，从末尾往前算
+- 例如：当前 115 的 00:30，后退 120 秒 → 跳到 114 从末尾往前 90 秒
+- 如果上一曲不够长，最多跳过一个文件（不会跳到 113）
 
-项目包含一个 Android WebView 包装应用，用于在手机上保持媒体控制活跃。
-
-**位置：** `android/` 目录
-
-**功能：**
-- 原生 MediaSession 支持（蓝牙/线控/通知栏控制）
-- 后台保活服务
-- 与网页端双向桥接
-
-**开发：**
-1. 用 Android Studio 打开 `android/` 目录
-2. 修改 `MainActivity.java` 中的 `DEFAULT_URL`
-3. 运行或生成 APK
-
-**桥接协议：** `web/src/utils/nativeBridge.ts`
-- 网页暴露 `MoonPlayerBridge` 对象供原生调用
-- 原生暴露 `MoonPlayerApp` 对象供网页调用
+## 搜索功能
+- **空搜索**: 默认显示所有歌曲（限制100条）
+- **有搜索词**: 按标题/艺术家/路径搜索，支持拼音首字母
+- **筛选条件**: 服务端处理，支持评分、年份、标签等多条件 AND 筛选
+- 组合使用：搜索词 + 筛选条件，搜索结果再在前端二次筛选

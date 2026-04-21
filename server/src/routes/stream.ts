@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { getDatabase } from '../db/schema.js';
@@ -16,12 +17,29 @@ import {
   parseWebdavPath
 } from '../utils/webdavCache.js';
 
+// 品质模式对应的比特率
+const QUALITY_BITRATES: Record<string, number> = {
+  low: 120,
+  medium: 192,
+  high: 320,
+  lossless: 0
+};
+
+// 品质模式对应的标签
+const QUALITY_LABELS: Record<string, string> = {
+  low: '低品质',
+  medium: '中品质',
+  high: '高品质',
+  lossless: '无损'
+};
+
 export async function streamRoutes(app: FastifyInstance) {
   const db = getDatabase();
 
   // 流式传输音频文件，支持 Range 请求
   app.get('/api/stream/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
+    const { quality } = req.query as { quality?: string };
 
     // 从数据库获取音轨信息
     const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id));
@@ -33,7 +51,7 @@ export async function streamRoutes(app: FastifyInstance) {
 
     // 检查是否是 WebDAV 文件
     if (filePath.startsWith('webdav://')) {
-      return await handleWebdavStream(req, reply, filePath);
+      return await handleWebdavStream(req, reply, filePath, quality);
     }
 
     // 检查本地文件是否存在
@@ -43,10 +61,26 @@ export async function streamRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: '文件不存在' });
     }
 
-    // 检查是否需要转码（浏览器不支持的格式）
-    if (needsTranscode(filePath)) {
+    // 获取品质设置
+    const qualityMode = quality || 'lossless';
+    const targetBitrate = QUALITY_BITRATES[qualityMode] || 0;
+
+    // 检查是否需要格式转码（浏览器不支持的格式）
+    const formatNeedsTranscode = needsTranscode(filePath);
+    
+    // 检查是否需要品质转码
+    const sourceBitrate = await getAudioBitrate(filePath);
+    const qualityNeedsTranscode = targetBitrate > 0 && sourceBitrate > targetBitrate;
+    
+    // 确定转码类型
+    const transcodeType = determineTranscodeType(formatNeedsTranscode, qualityNeedsTranscode, qualityMode);
+    
+    // 如果需要转码
+    if (transcodeType.needsTranscode) {
       ensureCacheDir();
-      const cachePath = getTranscodeCachePath(filePath);
+      
+      // 生成缓存路径（包含品质标识）
+      const cachePath = getQualityTranscodeCachePath(filePath, transcodeType.cacheKey);
       
       // 检查缓存是否存在且有效
       let useCache = false;
@@ -64,13 +98,13 @@ export async function streamRoutes(app: FastifyInstance) {
       // 如果没有有效缓存，执行转码
       if (!useCache) {
         try {
-          await transcodeToFile(filePath, cachePath);
+          await transcodeWithBitrate(filePath, cachePath, transcodeType.bitrate);
         } catch (err) {
           return reply.code(500).send({ error: '转码失败' });
         }
       }
       
-      // 现在从缓存文件流式传输（支持完整 Range）
+      // 从缓存文件流式传输
       const stat = fs.statSync(cachePath);
       const fileSize = stat.size;
       
@@ -92,16 +126,15 @@ export async function streamRoutes(app: FastifyInstance) {
         return reply.send(stream);
       }
 
-      // 非 Range 请求，发送整个文件
       reply.header('Content-Length', fileSize);
       return reply.send(fs.createReadStream(cachePath));
     }
 
+    // 无需转码，直接传输原文件
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
     const mimeType = getMimeType(filePath);
 
-    // 处理 Range 请求
     const range = req.headers.range;
 
     if (range) {
@@ -120,7 +153,6 @@ export async function streamRoutes(app: FastifyInstance) {
       return reply.send(stream);
     }
 
-    // 非 Range 请求，发送整个文件
     reply.header('Content-Length', fileSize);
     reply.header('Content-Type', mimeType);
     reply.header('Accept-Ranges', 'bytes');
@@ -154,7 +186,6 @@ export async function streamRoutes(app: FastifyInstance) {
         const duration = await getWebdavFileDuration(configId, webdavPath);
         
         if (duration) {
-          // 更新数据库
           db.prepare('UPDATE tracks SET duration = ? WHERE id = ?').run(duration, Number(id));
           return { duration };
         }
@@ -166,7 +197,6 @@ export async function streamRoutes(app: FastifyInstance) {
     try {
       const duration = await getLocalFileDuration(filePath);
       if (duration) {
-        // 更新数据库
         db.prepare('UPDATE tracks SET duration = ? WHERE id = ?').run(duration, Number(id));
         return { duration };
       }
@@ -232,39 +262,87 @@ export async function streamRoutes(app: FastifyInstance) {
   });
 }
 
-// 获取文件时长（用于转码流的 Range 支持）
-// 已弃用，改用缓存文件方案
-// async function getFileDuration(filePath: string): Promise<number | null> {
-//   return getDurationViaFfprobe(filePath);
-// }
-
-function getMimeType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  const mimeTypes: Record<string, string> = {
-    '.mp3': 'audio/mpeg',
-    '.flac': 'audio/flac',
-    '.wav': 'audio/wav',
-    '.ogg': 'audio/ogg',
-    '.m4a': 'audio/mp4',
-    '.aac': 'audio/aac',
-    '.wma': 'audio/x-ms-wma',
-    '.ape': 'audio/x-ape'
+// 确定转码类型
+function determineTranscodeType(formatNeedsTranscode: boolean, qualityNeedsTranscode: boolean, qualityMode: string): {
+  needsTranscode: boolean;
+  bitrate: number;
+  cacheKey: string;
+  qualityLabel: string | null;
+} {
+  // 优先显示品质标签
+  if (qualityNeedsTranscode) {
+    return {
+      needsTranscode: true,
+      bitrate: QUALITY_BITRATES[qualityMode] || 192,
+      cacheKey: `quality_${qualityMode}`,
+      qualityLabel: QUALITY_LABELS[qualityMode] || null
+    };
+  }
+  
+  // 格式转码（浏览器不支持）
+  if (formatNeedsTranscode) {
+    return {
+      needsTranscode: true,
+      bitrate: 192, // 格式转码使用默认 192kbps
+      cacheKey: 'format',
+      qualityLabel: null // 不显示品质标签，前端会显示 [转码]
+    };
+  }
+  
+  // 无需转码
+  return {
+    needsTranscode: false,
+    bitrate: 0,
+    cacheKey: '',
+    qualityLabel: null
   };
-  return mimeTypes[ext] || 'audio/mpeg';
 }
 
-// 检查是否需要转码（从模块导入）
-// needsTranscode 已从 webdavCache 模块导入
+// 获取带品质标识的转码缓存路径
+function getQualityTranscodeCachePath(sourcePath: string, cacheKey: string): string {
+  const hash = crypto.createHash('md5').update(`${cacheKey}:${sourcePath}`).digest('hex');
+  return path.join(os.homedir(), '.moonplayer', 'transcode_cache', `${hash}.mp3`);
+}
 
-// 转码到文件（缓存）
-function transcodeToFile(filePath: string, outputPath: string): Promise<void> {
+// 获取音频文件比特率
+async function getAudioBitrate(filePath: string): Promise<number> {
+  return new Promise((resolve) => {
+    const ffprobe = spawn('ffprobe', [
+      '-v', 'quiet',
+      '-show_entries', 'format=bit_rate',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ]);
+    
+    let output = '';
+    ffprobe.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    ffprobe.on('close', (code) => {
+      if (code === 0) {
+        const bitrate = parseInt(output.trim(), 10);
+        if (!isNaN(bitrate) && bitrate > 0) {
+          resolve(bitrate / 1000); // 转换为 kbps
+          return;
+        }
+      }
+      resolve(999999); // 无法获取时假设是高比特率
+    });
+    
+    ffprobe.on('error', () => resolve(999999));
+  });
+}
+
+// 带比特率的转码
+function transcodeWithBitrate(filePath: string, outputPath: string, bitrate: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = [
       '-i', filePath,
       '-f', 'mp3',
-      '-ab', '192k',
+      '-ab', `${bitrate}k`,
       '-vn',
-      '-y', // 覆盖已存在文件
+      '-y',
       outputPath
     ];
     
@@ -289,17 +367,30 @@ function transcodeToFile(filePath: string, outputPath: string): Promise<void> {
   });
 }
 
+function getMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    '.mp3': 'audio/mpeg',
+    '.flac': 'audio/flac',
+    '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg',
+    '.m4a': 'audio/mp4',
+    '.aac': 'audio/aac',
+    '.wma': 'audio/x-ms-wma',
+    '.ape': 'audio/x-ape'
+  };
+  return mimeTypes[ext] || 'audio/mpeg';
+}
+
 // 获取本地文件时长
 async function getLocalFileDuration(filePath: string): Promise<number | null> {
   try {
-    // 先尝试 music-metadata
     const metadata = await parseFile(filePath);
     if (metadata.format.duration) {
       return metadata.format.duration;
     }
   } catch {}
   
-  // 备用：使用 ffprobe
   return await getDurationViaFfprobe(filePath);
 }
 
@@ -341,15 +432,12 @@ async function getWebdavFileDuration(configId: number, filePath: string): Promis
     
     const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
     
-    // 下载文件头部并用 music-metadata 解析
     const stat = await client.stat(filePath) as any;
     if (stat?.duration) {
       return stat.duration;
     }
     
     const size = stat?.size || 0;
-    
-    // 下载前 512KB 用于分析
     const chunkSize = Math.min(512 * 1024, size);
     const buffer = await client.getFileContents(filePath, {
       format: 'buffer',
@@ -363,7 +451,6 @@ async function getWebdavFileDuration(configId: number, filePath: string): Promis
       return metadata.format.duration;
     }
     
-    // 无法从部分数据获取时长，需要完整下载
     return await getWebdavDurationViaDownload(configId, filePath);
   } catch (err) {
     console.error('获取 WebDAV 文件时长失败:', err);
@@ -382,8 +469,6 @@ async function getWebdavDurationViaDownload(configId: number, filePath: string):
       }
       
       const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
-      
-      // 创建临时管道
       const stream = await client.createReadStream(filePath);
       
       const ffprobe = spawn('ffprobe', [
@@ -418,8 +503,8 @@ async function getWebdavDurationViaDownload(configId: number, filePath: string):
   });
 }
 
-// 处理 WebDAV 文件流（支持 Range 请求）
-async function handleWebdavStream(req: any, reply: any, filePath: string) {
+// 处理 WebDAV 文件流（支持 Range 请求和品质转码）
+async function handleWebdavStream(req: any, reply: any, filePath: string, quality?: string) {
   const parsed = parseWebdavPath(filePath);
   if (!parsed) {
     return reply.code(400).send({ error: '无效的 WebDAV 路径格式' });
@@ -458,16 +543,26 @@ async function handleWebdavStream(req: any, reply: any, filePath: string) {
       fs.writeFileSync(cachePath, buffer);
     }
     
-    // 检查是否需要转码（浏览器不支持的格式）
-    const ext = path.extname(webdavPath).toLowerCase();
-    const shouldTranscode = needsTranscode(webdavPath);
+    // 获取品质设置
+    const qualityMode = quality || 'lossless';
+    const targetBitrate = QUALITY_BITRATES[qualityMode] || 0;
+    
+    // 检查是否需要格式转码
+    const formatNeedsTranscode = needsTranscode(webdavPath);
+    
+    // 检查是否需要品质转码
+    const sourceBitrate = await getAudioBitrate(cachePath);
+    const qualityNeedsTranscode = targetBitrate > 0 && sourceBitrate > targetBitrate;
+    
+    // 确定转码类型
+    const transcodeType = determineTranscodeType(formatNeedsTranscode, qualityNeedsTranscode, qualityMode);
     
     let finalCachePath = cachePath;
     let mimeType = getMimeType(webdavPath);
     
-    if (shouldTranscode) {
+    if (transcodeType.needsTranscode) {
       // 需要转码
-      const transcodeCachePath = getTranscodeCachePath(webdavPath, `webdav:${configId}:`);
+      const transcodeCachePath = getQualityTranscodeCachePath(webdavPath, `webdav:${configId}:${transcodeType.cacheKey}`);
       
       let useTranscodeCache = false;
       if (fs.existsSync(transcodeCachePath)) {
@@ -481,21 +576,21 @@ async function handleWebdavStream(req: any, reply: any, filePath: string) {
       }
       
       if (!useTranscodeCache) {
-        await transcodeToFile(cachePath, transcodeCachePath);
+        await transcodeWithBitrate(cachePath, transcodeCachePath, transcodeType.bitrate);
       }
       
       finalCachePath = transcodeCachePath;
       mimeType = 'audio/mpeg';
+      
     }
     
-    // 现在从缓存文件流式传输（支持完整 Range）
+    // 从缓存文件流式传输
     const fileStat = fs.statSync(finalCachePath);
     const fileSize = fileStat.size;
     
     reply.header('Content-Type', mimeType);
     reply.header('Accept-Ranges', 'bytes');
     
-    // 处理 Range 请求
     const range = req.headers.range;
     
     if (range) {
@@ -512,7 +607,6 @@ async function handleWebdavStream(req: any, reply: any, filePath: string) {
       return reply.send(stream);
     }
     
-    // 非 Range 请求，发送整个文件
     reply.header('Content-Length', fileSize);
     return reply.send(fs.createReadStream(finalCachePath));
   } catch (err) {

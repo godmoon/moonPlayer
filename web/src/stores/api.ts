@@ -137,6 +137,18 @@ export async function searchTracks(query: string): Promise<any[]> {
   return res.data.tracks;
 }
 
+// 获取所有歌曲（搜索为空时使用）
+export async function getAllTracks(): Promise<any[]> {
+  const res = await api.get('/tracks/all');
+  return res.data.tracks;
+}
+
+// 按筛选条件获取歌曲（服务端筛选）
+export async function filterTracksByConditions(conditions: Array<{ match_field: string; match_op: string; match_value: string }>): Promise<any[]> {
+  const res = await api.post('/tracks/filter-by-conditions', { conditions });
+  return res.data.tracks;
+}
+
 export async function getTopRatedTracks(limit = 100): Promise<any[]> {
   const res = await api.get('/tracks/top-rated', { params: { limit } });
   return res.data.tracks;
@@ -161,17 +173,34 @@ export async function deleteTrack(trackId: number, deleteFile = false): Promise<
   return res.data;
 }
 
+// ========== 回收站 ==========
+
+export async function getRecycledTracks(): Promise<any[]> {
+  const res = await api.get('/tracks/recycled');
+  return res.data.tracks;
+}
+
+export async function restoreTrack(trackId: number): Promise<{ success: boolean }> {
+  const res = await api.post(`/tracks/${trackId}/restore`);
+  return res.data;
+}
+
+export async function permanentDeleteTrack(trackId: number): Promise<{ success: boolean; error?: string }> {
+  const res = await api.delete(`/tracks/${trackId}/permanent`);
+  return res.data;
+}
+
+export async function removeTrackFromPlaylists(trackId: number): Promise<{ success: boolean }> {
+  const res = await api.delete(`/tracks/${trackId}/remove-from-playlists`);
+  return res.data;
+}
+
 export async function getLowRatedTracks(threshold = -5, limit = 100): Promise<any[]> {
   const res = await api.get('/tracks/low-rated', { params: { threshold, limit } });
   return res.data.tracks;
 }
 
 // ========== 历史记录 ==========
-
-export async function getRecentPlaylists(): Promise<any[]> {
-  const res = await api.get('/history/playlists');
-  return res.data;
-}
 
 export async function getPlaylistHistory(playlistId: number): Promise<any> {
   const res = await api.get(`/history/playlist/${playlistId}`);
@@ -188,7 +217,10 @@ export async function recordHistory(playlistId: number, trackId: number, positio
 
 // ========== 流媒体 ==========
 
-export function getStreamUrl(trackId: number): string {
+export function getStreamUrl(trackId: number, qualityMode?: string): string {
+  if (qualityMode && qualityMode !== 'lossless') {
+    return `/api/stream/${trackId}?quality=${qualityMode}`;
+  }
   return `/api/stream/${trackId}`;
 }
 

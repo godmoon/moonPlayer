@@ -30,6 +30,7 @@ export const MATCH_FIELDS = [
   { value: 'artist', label: '演唱者', ops: ['=', 'contains', 'not_contains'] },
   { value: 'album', label: '专辑', ops: ['=', 'contains', 'not_contains'] },
   { value: 'tags', label: '标签', ops: ['contains', 'not_contains'] },
+  { value: 'path', label: '路径', ops: ['contains', 'not_contains'] },
 ];
 
 export const MATCH_OP_LABELS: Record<string, string> = {

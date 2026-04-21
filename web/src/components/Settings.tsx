@@ -1,9 +1,7 @@
 // 设置组件
 import { useState, useEffect } from 'react';
 import { getMusicPaths, setMusicPaths, getWebdavConfigs, addWebdavConfig, deleteWebdavConfig, testWebdavConfig, type WebdavConfig } from '../stores/api';
-import { usePlayerStore } from '../stores/playerStore';
-
-type PlayMode = 'sequential' | 'shuffle' | 'weighted' | 'random' | 'single-loop';
+import { usePlayerStore, QUALITY_MODES, type PlayMode, type QualityMode } from '../stores/playerStore';
 
 const playModes: { id: PlayMode; label: string; icon: string }[] = [
   { id: 'sequential', label: '顺序播放', icon: '▶️' },
@@ -17,7 +15,7 @@ export function Settings() {
   const [musicPaths, setMusicPathsState] = useState<string[]>([]);
   const [newPath, setNewPath] = useState('');
   const [saving, setSaving] = useState(false);
-  const { playMode, setPlayMode } = usePlayerStore();
+  const { playMode, setPlayMode, qualityMode, setQualityMode } = usePlayerStore();
 
   // WebDAV 配置
   const [webdavConfigs, setWebdavConfigs] = useState<WebdavConfig[]>([]);
@@ -43,6 +41,16 @@ export function Settings() {
   useEffect(() => {
     loadMusicPaths();
     loadWebdavConfigs();
+    // 从 localStorage 恢复省流模式设置
+    try {
+      const savedQualityMode = localStorage.getItem('qualityMode');
+      if (savedQualityMode && ['low', 'medium', 'high', 'lossless'].includes(savedQualityMode)) {
+        // 只有当 store 中的值与 localStorage 不同时才设置
+        if (savedQualityMode !== usePlayerStore.getState().qualityMode) {
+          usePlayerStore.getState().setQualityMode(savedQualityMode as QualityMode);
+        }
+      }
+    } catch {}
   }, []);
 
   const loadMusicPaths = async () => {
@@ -332,22 +340,36 @@ export function Settings() {
       {/* 播放模式 */}
       <div className="mb-6">
         <label className="block text-sm text-gray-400 mb-2">默认播放模式</label>
-        <div className="grid grid-cols-2 gap-2">
+        <select
+          value={playMode}
+          onChange={(e) => setPlayMode(e.target.value as PlayMode)}
+          className="w-full px-3 py-2 bg-gray-700 rounded text-sm text-white border border-gray-600 focus:border-purple-500 focus:outline-none"
+        >
           {playModes.map((mode) => (
-            <button
-              key={mode.id}
-              onClick={() => setPlayMode(mode.id)}
-              className={`px-3 py-2 rounded text-left ${
-                playMode === mode.id
-                  ? 'bg-purple-600 text-white'
-                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-              }`}
-            >
-              <span className="mr-2">{mode.icon}</span>
-              {mode.label}
-            </button>
+            <option key={mode.id} value={mode.id}>
+              {mode.icon} {mode.label}
+            </option>
           ))}
-        </div>
+        </select>
+      </div>
+
+      {/* 省流模式 */}
+      <div className="mb-6">
+        <label className="block text-sm text-gray-400 mb-2">省流模式</label>
+        <select
+          value={qualityMode}
+          onChange={(e) => setQualityMode(e.target.value as QualityMode)}
+          className="w-full px-3 py-2 bg-gray-700 rounded text-sm text-white border border-gray-600 focus:border-purple-500 focus:outline-none"
+        >
+          {QUALITY_MODES.map((mode) => (
+            <option key={mode.id} value={mode.id}>
+              {mode.label} ({mode.description})
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-gray-500 mt-1">
+          选择非无损品质时，高比特率音频将转码为指定比特率
+        </p>
       </div>
 
       {/* 账户安全 */}

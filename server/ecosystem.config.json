@@ -2,8 +2,7 @@
   "apps": [
     {
       "name": "moonplayer-server",
-      "script": "npm",
-      "args": "run dev",
+      "script": "dist/index.js",
       "cwd": "/home/moon/ai/moonPlayer/server",
       "env": {
         "NODE_ENV": "production",

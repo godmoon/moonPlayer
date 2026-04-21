@@ -33,20 +33,25 @@ export function PlaylistDetail({ playlistId, onClose }: {
   const { currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying } = usePlayerStore();
   const lastPlayedRef = useRef<HTMLDivElement>(null);
 
-  const loadPlaylist = useCallback(async (autoPlay = false) => {
+  const loadPlaylist = useCallback(async (autoPlay = false, signal?: AbortSignal) => {
     setLoading(true);
     try {
+      if (signal?.aborted) return;
+      
       const result = await getPlaylist(playlistId);
+      if (signal?.aborted) return;
       setPlaylist(result);
       
       // 只加载已有数据，不重新扫描
       const tracksResult = await getPlaylistTracks(playlistId);
+      if (signal?.aborted) return;
       setTracks(tracksResult.tracks || []);
 
       let lastTrackId: number | null = null;
       let lastPosition = 0;
       try {
         const history = await getPlaylistHistory(playlistId);
+        if (signal?.aborted) return;
         if (history.lastTrack) {
           lastTrackId = history.lastTrack.id;
           lastPosition = history.position || 0;
@@ -61,6 +66,7 @@ export function PlaylistDetail({ playlistId, onClose }: {
 
       // 自动播放逻辑：如果不是当前播放列表，则自动开始播放
       if (autoPlay && tracksResult.tracks && tracksResult.tracks.length > 0) {
+        if (signal?.aborted) return;
         const isCurrentPlaylist = currentPlaylist?.id === playlistId;
         
         if (!isCurrentPlaylist) {
@@ -117,7 +123,9 @@ export function PlaylistDetail({ playlistId, onClose }: {
   }, [playlistId, currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying]);
 
   useEffect(() => {
-    loadPlaylist(true); // 首次加载时自动播放
+    const controller = new AbortController();
+    loadPlaylist(true, controller.signal); // 首次加载时自动播放
+    return () => controller.abort();
   }, [loadPlaylist]);
 
   // 计算需要高亮和滚动的曲目 ID

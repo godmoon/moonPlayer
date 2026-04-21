@@ -356,6 +356,15 @@ function migrateDatabase(db: Database.Database) {
   if (!tracksColumns.includes('tags')) {
     db.exec('ALTER TABLE tracks ADD COLUMN tags TEXT');
   }
+  if (!tracksColumns.includes('recycled')) {
+    db.exec('ALTER TABLE tracks ADD COLUMN recycled INTEGER DEFAULT 0');
+  }
+  if (!tracksColumns.includes('recycled_at')) {
+    db.exec('ALTER TABLE tracks ADD COLUMN recycled_at INTEGER');
+  }
+
+  // 创建回收站索引
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tracks_recycled ON tracks(recycled)`);
 }
 
 // 检查是否需要初始化管理员

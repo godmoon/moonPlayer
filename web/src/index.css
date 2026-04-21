@@ -17,13 +17,33 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* 支持 dvh 的浏览器优先使用动态视口高度 */
+@supports (height: 100dvh) {
+  html, body, #root {
+    height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  }
+}
+
+/* 回退方案 */
+@supports not (height: 100dvh) {
+  html, body, #root {
+    height: 100vh;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  /* 安全区域 */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 #root {
-  min-height: 100vh;
   display: flex;
   flex-direction: column;
 }

@@ -5,8 +5,9 @@ import { usePlayerStore } from '../../stores/playerStore';
 import type { Track } from '../../stores/playerStore';
 import { type FileNode, type BrowseResult, convertWebdavTracks, createPlaylistObject } from './utils';
 
-export function FileBrowser({ onPlay }: {
+export function FileBrowser({ onPlay, onRecycleBin }: {
   onPlay: (path: string) => void;
+  onRecycleBin?: () => void;
 }) {
   const [currentPath, setCurrentPath] = useState<string>('');
   const [rootPath, setRootPath] = useState<string>('');
@@ -259,6 +260,11 @@ export function FileBrowser({ onPlay }: {
         <span className="flex-1 text-gray-400 text-sm truncate">
           {isWebdavView && currentWebdav ? `☁️ ${currentWebdav.name}: ` : ''}{currentPath || rootPath}
         </span>
+        {onRecycleBin && (
+          <button onClick={onRecycleBin} className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm" title="回收站">
+            🗑️ 回收站
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto p-2">

@@ -10,16 +10,20 @@ import { RatingManager } from './components/RatingManager';
 import { Login } from './components/Login';
 import { Setup } from './components/Setup';
 import { SearchView } from './components/SearchView';
+import { RecycleBin } from './components/RecycleBin';
 import { getNavOrder } from './stores/api';
 import { detectFormatSupport, logFormatSupport } from './utils/formatSupport';
 import { setupNativeBridge } from './utils/nativeBridge';
 
 type AuthState = 'checking' | 'needSetup' | 'needLogin' | 'authenticated';
 
+type ContentView = 'main' | 'recycleBin';
+
 function App() {
   const [authState, setAuthState] = useState<AuthState>('checking');
   const [activeTab, setActiveTab] = useState<Tab | null>(null);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
+  const [contentView, setContentView] = useState<ContentView>('main');
 
   // 检查登录状态
   useEffect(() => {
@@ -130,19 +134,19 @@ function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-950 text-white overflow-hidden">
+    <div className="flex-1 flex flex-col bg-gray-950 text-white overflow-hidden">
       {/* 主内容区 */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* 侧边栏 */}
         <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
 
-        {/* 内容区：手机端自动留出播放器空间 */}
-        <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain pb-[140px] md:pb-[100px]">
-          {activeTab === 'browse' && (
-            <FileBrowser onPlay={handlePlay} />
-          )}
-
-          {activeTab === 'playlists' && (
+        {/* 内容区 */}
+        <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain">
+          {contentView === 'recycleBin' ? (
+            <RecycleBin />
+          ) : activeTab === 'browse' ? (
+            <FileBrowser onPlay={handlePlay} onRecycleBin={() => setContentView('recycleBin')} />
+          ) : activeTab === 'playlists' ? (
             selectedPlaylistId ? (
               <PlaylistDetail
                 playlistId={selectedPlaylistId}
@@ -151,17 +155,17 @@ function App() {
             ) : (
               <UnifiedPlaylist onSelectPlaylist={handleSelectPlaylist} />
             )
-          )}
-
-          {activeTab === 'ratings' && <RatingManager />}
-
-          {activeTab === 'search' && <SearchView />}
-
-          {activeTab === 'settings' && <Settings />}
+          ) : activeTab === 'ratings' ? (
+            <RatingManager />
+          ) : activeTab === 'search' ? (
+            <SearchView />
+          ) : activeTab === 'settings' ? (
+            <Settings />
+          ) : null}
         </div>
       </div>
 
-      {/* 底部播放器 */}
+      {/* 底部播放器 - 与内容区平级 */}
       <PlayerBar />
     </div>
   );

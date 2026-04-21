@@ -60,7 +60,7 @@ export function RatingManager() {
 
   const handleBatchDelete = async () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`确定删除选中的 ${selectedIds.size} 首歌曲？此操作不可恢复！`)) return;
+    if (!confirm(`确定将选中的 ${selectedIds.size} 首歌曲移入回收站？`)) return;
 
     setActionLoading(true);
     try {
@@ -116,7 +116,7 @@ export function RatingManager() {
               <span className="text-sm text-gray-400">已选 {selectedIds.size} 首</span>
               <button onClick={() => handleBatchRating(0)} disabled={actionLoading} className="px-3 py-1 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 rounded text-sm">设为 0 分</button>
               <button onClick={() => handleBatchRating(5)} disabled={actionLoading} className="px-3 py-1 bg-green-700 hover:bg-green-600 disabled:opacity-50 rounded text-sm">设为 +5</button>
-              <button onClick={handleBatchDelete} disabled={actionLoading} className="px-3 py-1 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded text-sm">删除选中</button>
+              <button onClick={handleBatchDelete} disabled={actionLoading} className="px-3 py-1 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded text-sm">移入回收站</button>
             </>
           )}
           <button onClick={handleResetAll} disabled={actionLoading} className="ml-auto px-3 py-1 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 rounded text-sm">重置所有评分</button>
@@ -153,7 +153,7 @@ export function RatingManager() {
                   onClick={async () => { await deleteTrack(track.id); loadLowRatedTracks(); }}
                   className="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs"
                 >
-                  删除
+                  移入回收站
                 </button>
               </div>
             ))}

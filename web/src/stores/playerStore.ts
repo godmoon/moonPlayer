@@ -13,6 +13,16 @@ interface SleepTimerState {
 
 type PlayMode = 'sequential' | 'shuffle' | 'weighted' | 'random' | 'single-loop';
 
+// 省流模式（比特率限制）
+export type QualityMode = 'low' | 'medium' | 'high' | 'lossless';
+
+export const QUALITY_MODES: { id: QualityMode; label: string; bitrate: number; description: string }[] = [
+  { id: 'low', label: '低品质', bitrate: 120, description: '120kbps，省流量' },
+  { id: 'medium', label: '中品质', bitrate: 192, description: '192kbps，平衡' },
+  { id: 'high', label: '高品质', bitrate: 320, description: '320kbps，高音质' },
+  { id: 'lossless', label: '无损', bitrate: 0, description: '原始音质' }
+];
+
 interface Track {
   id: number;
   path: string;
@@ -56,6 +66,9 @@ interface PlayerState {
   // 播放模式
   playMode: PlayMode;
 
+  // 省流模式
+  qualityMode: QualityMode;
+
   // 睡眠定时
   sleepTimer: SleepTimerState;
 
@@ -78,6 +91,9 @@ interface PlayerState {
   setSleepTimer: (mode: SleepTimerMode, minutes: number) => void;
   clearSleepTimer: () => void;
   tickSleepTimer: () => void; // 每分钟调用一次，更新剩余时间
+
+  // 省流模式控制
+  setQualityMode: (mode: QualityMode) => void;
 
   // 播放控制
   playNext: () => void;
@@ -113,6 +129,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     endTime: null,
     remainingMinutes: 0
   },
+  qualityMode: 'lossless' as QualityMode,
 
   // 👇 新增
   lastPlayedPositions: {},
@@ -156,6 +173,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     } else {
       set({ playMode: mode });
     }
+  },
+
+  setQualityMode: (mode: QualityMode) => {
+    set({ qualityMode: mode });
+    // 保存到 localStorage
+    try {
+      localStorage.setItem('qualityMode', mode);
+    } catch {}
   },
 
   setPendingSeekPosition: (position) => set({ pendingSeekPosition: position }),
@@ -340,9 +365,12 @@ function generateShuffleQueue(length: number): number[] {
   return arr;
 }
 
-// 权重随机
+// 权重随机：每多1分，增加10%被随机到的概率
+// 评分0分：权重10（基准）
+// 评分5分：权重15（比基准高50%）
+// 评分10分：权重20（比基准高100%）
 function weightedRandomIndex(tracks: Track[]): number {
-  const weights = tracks.map(t => Math.max(1, t.rating + 10));
+  const weights = tracks.map(t => Math.max(1, 10 + t.rating));
   const totalWeight = weights.reduce((sum, w) => sum + w, 0);
 
   let random = Math.random() * totalWeight;

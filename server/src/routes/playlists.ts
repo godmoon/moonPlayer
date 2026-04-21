@@ -9,7 +9,7 @@ import { createClient } from 'webdav';
 export async function playlistRoutes(app: FastifyInstance) {
   const db = getDatabase();
 
-  // 获取所有播放列表
+  // 获取所有播放列表（含最近播放信息）
   app.get('/api/playlists', async () => {
     const playlists = db.prepare(`
       SELECT p.*, COUNT(pi.id) as item_count
@@ -17,8 +17,42 @@ export async function playlistRoutes(app: FastifyInstance) {
       LEFT JOIN playlist_items pi ON p.id = pi.playlist_id
       GROUP BY p.id
       ORDER BY p.updated_at DESC
-    `).all();
-    return playlists;
+    `).all() as any[];
+
+    // 获取所有播放列表的最近播放记录
+    const historyRows = db.prepare(`
+      SELECT ph.playlist_id, ph.track_id, ph.position, ph.timestamp,
+             t.title as track_title, t.artist as track_artist, t.duration as track_duration
+      FROM play_history ph
+      JOIN tracks t ON ph.track_id = t.id
+      WHERE ph.id IN (
+        SELECT MAX(id) FROM play_history GROUP BY playlist_id
+      )
+    `).all() as any[];
+
+    // 创建历史记录映射
+    const historyMap = new Map<number, any>();
+    for (const h of historyRows) {
+      historyMap.set(h.playlist_id, h);
+    }
+
+    // 合并历史信息到播放列表
+    const result = playlists.map(pl => {
+      const history = historyMap.get(pl.id);
+      return {
+        ...pl,
+        last_track: history ? {
+          id: history.track_id,
+          title: history.track_title,
+          artist: history.track_artist,
+          duration: history.track_duration
+        } : null,
+        last_position: history?.position || 0,
+        last_played_time: history?.timestamp || 0
+      };
+    });
+
+    return result;
   });
 
   // 获取单个播放列表详情
@@ -295,8 +329,16 @@ export async function playlistRoutes(app: FastifyInstance) {
         const isPureMatch = item.type === 'match';
 
         // 检查单个条件是否匹配
-        function checkCondition(cached: any, condField: string, condOp: string, condValue: string): boolean {
-          const fieldValue = cached[condField];
+        // filePathParam: 当检查 path 字段时使用此参数，否则从 cached 获取
+        function checkCondition(cached: any, condField: string, condOp: string, condValue: string, filePathParam?: string): boolean {
+          // path 字段使用传入的文件路径，其他字段从缓存获取
+          let fieldValue: any;
+          if (condField === 'path' && filePathParam !== undefined) {
+            fieldValue = filePathParam;
+          } else {
+            fieldValue = cached[condField];
+          }
+          
           const numValue = parseFloat(condValue);
           
           switch (condOp) {
@@ -361,7 +403,7 @@ export async function playlistRoutes(app: FastifyInstance) {
                   if (match && !isPureMatch && legacyMatchField && legacyMatchOp && legacyMatchValue !== null) {
                     const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
                     if (cached) {
-                      match = checkCondition(cached, legacyMatchField, legacyMatchOp, legacyMatchValue);
+                      match = checkCondition(cached, legacyMatchField, legacyMatchOp, legacyMatchValue, filePath);
                     } else {
                       match = false;
                     }
@@ -373,7 +415,7 @@ export async function playlistRoutes(app: FastifyInstance) {
                     if (cached) {
                       // 所有条件都必须满足 (AND)
                       for (const cond of conditions) {
-                        if (!checkCondition(cached, cond.match_field, cond.match_op, cond.match_value)) {
+                        if (!checkCondition(cached, cond.match_field, cond.match_op, cond.match_value, filePath)) {
                           match = false;
                           break;
                         }
@@ -447,12 +489,12 @@ export async function playlistRoutes(app: FastifyInstance) {
     // 更新播放列表时间
     db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), Number(id));
 
-    // 返回音轨列表
+    // 返回音轨列表（排除回收站）
     const tracks = db.prepare(`
       SELECT t.id, t.path, t.title, t.artist, t.album, t.duration, t.rating, t.play_count, t.skip_count, t.last_played, t.date_added
       FROM tracks t
       JOIN playlist_tracks pt ON t.id = pt.track_id
-      WHERE pt.playlist_id = ?
+      WHERE pt.playlist_id = ? AND (t.recycled = 0 OR t.recycled IS NULL)
       ORDER BY pt."order"
     `).all(Number(id));
 
@@ -472,7 +514,7 @@ export async function playlistRoutes(app: FastifyInstance) {
       SELECT t.id, t.path, t.title, t.artist, t.album, t.duration, t.rating, t.play_count, t.skip_count, t.last_played, t.date_added
       FROM tracks t
       JOIN playlist_tracks pt ON t.id = pt.track_id
-      WHERE pt.playlist_id = ?
+      WHERE pt.playlist_id = ? AND (t.recycled = 0 OR t.recycled IS NULL)
       ORDER BY pt."order"
     `).all(Number(id));
 
