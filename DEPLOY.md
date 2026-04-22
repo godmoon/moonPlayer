@@ -27,6 +27,9 @@ pm2 logs moonplayer-server
 
 # 停止服务
 pm2 stop moonplayer-server
+
+# 快捷命令
+cd web && npm run build && cd ../server && npm run build && pm2 startOrRestart ecosystem.config.json && cd ..
 ```
 
 ### 生成Windows可执行文件

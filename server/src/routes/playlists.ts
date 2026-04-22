@@ -1,10 +1,266 @@
 // 播放列表路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
 import { parseFile } from 'music-metadata';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { createClient } from 'webdav';
+
+// 扫描任务执行函数（独立导出，供后台异步调用）
+export async function performScan(playlistId: number, db: any, app: FastifyInstance): Promise<{ tracks: any[]; total: number }> {
+  const items = db.prepare('SELECT * FROM playlist_items WHERE playlist_id = ?').all(playlistId) as any[];
+
+  const audioExtensions = /\.(mp3|flac|wav|ogg|m4a|aac|wma|ape)$/i;
+  const trackPaths: string[] = [];
+
+  // WebDAV 客户端缓存
+  const webdavClients = new Map<number, any>();
+  
+  async function getWebdavClient(configId: number) {
+    if (!webdavClients.has(configId)) {
+      const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as any;
+      if (config) {
+        const client = createClient(config.url, {
+          username: config.username || undefined,
+          password: config.password || undefined
+        });
+        webdavClients.set(configId, client);
+      }
+    }
+    return webdavClients.get(configId);
+  }
+
+  for (const item of items) {
+    if (item.type === 'file') {
+      if (audioExtensions.test(item.path)) {
+        trackPaths.push(item.path);
+      }
+    } else if (item.type === 'directory') {
+      const dirPath = item.path;
+      const includeSubdirs = item.include_subdirs === 1;
+      
+      // 检查是否是 WebDAV 路径
+      const webdavMatch = dirPath.match(/^webdav:\/\/(\d+)(.*)$/);
+      if (webdavMatch) {
+        const configId = parseInt(webdavMatch[1], 10);
+        const webdavDir = webdavMatch[2];
+        const client = await getWebdavClient(configId);
+        
+        if (client) {
+          async function scanWebdavDir(dir: string) {
+            try {
+              const contents = await client.getDirectoryContents(dir);
+              for (const entry of contents as any[]) {
+                if (entry.type === 'directory' && includeSubdirs) {
+                  await scanWebdavDir(entry.filename);
+                } else if (entry.type === 'file' && audioExtensions.test(entry.basename)) {
+                  trackPaths.push(`webdav://${configId}${entry.filename}`);
+                }
+              }
+            } catch (err) {
+              // 忽略无法读取的目录
+            }
+          }
+          await scanWebdavDir(webdavDir);
+        }
+      } else {
+        function scanDir(dir: string) {
+          try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.isDirectory() && includeSubdirs) {
+                scanDir(path.join(dir, entry.name));
+              } else if (entry.isFile() && audioExtensions.test(entry.name)) {
+                trackPaths.push(path.join(dir, entry.name));
+              }
+            }
+          } catch (err) {
+            // 忽略无法读取的目录
+          }
+        }
+        scanDir(dirPath);
+      }
+    } else if (item.type === 'filter' || item.type === 'match') {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
+      const musicPaths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
+      
+      const conditions = item.type === 'match' 
+        ? (db.prepare('SELECT * FROM playlist_item_conditions WHERE item_id = ? ORDER BY "order"').all(item.id) as any[])
+        : [];
+      
+      const filterRegex = item.filter_regex ? new RegExp(item.filter_regex, 'i') : null;
+      const filterArtist = item.filter_artist;
+      const filterAlbum = item.filter_album;
+      const filterTitle = item.filter_title;
+      const legacyMatchField = item.match_field;
+      const legacyMatchOp = item.match_op;
+      const legacyMatchValue = item.match_value;
+      const isPureMatch = item.type === 'match';
+
+      function checkCondition(cached: any, condField: string, condOp: string, condValue: string, filePathParam?: string): boolean {
+        let fieldValue: any;
+        if (condField === 'path' && filePathParam !== undefined) {
+          fieldValue = filePathParam;
+        } else {
+          fieldValue = cached[condField];
+        }
+        
+        const numValue = parseFloat(condValue);
+        
+        switch (condOp) {
+          case '>':
+            if (typeof fieldValue === 'number') return fieldValue > numValue;
+            return false;
+          case '<':
+            if (typeof fieldValue === 'number') return fieldValue < numValue;
+            return false;
+          case '>=':
+            if (typeof fieldValue === 'number') return fieldValue >= numValue;
+            return false;
+          case '<=':
+            if (typeof fieldValue === 'number') return fieldValue <= numValue;
+            return false;
+          case '=':
+            return String(fieldValue || '') === String(condValue);
+          case 'contains':
+            if (condField === 'tags') {
+              try {
+                const tags = cached.tags ? JSON.parse(cached.tags) : [];
+                return tags.some((t: string) => t.includes(condValue));
+              } catch { return false; }
+            } else {
+              return String(fieldValue || '').includes(condValue);
+            }
+          case 'not_contains':
+            if (condField === 'tags') {
+              try {
+                const tags = cached.tags ? JSON.parse(cached.tags) : [];
+                return !tags.some((t: string) => t.includes(condValue));
+              } catch { return true; }
+            } else {
+              return !String(fieldValue || '').includes(condValue);
+            }
+          default:
+            return false;
+        }
+      }
+
+      for (const musicPath of musicPaths) {
+        function scanForFilter(dir: string) {
+          try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.isDirectory()) {
+                scanForFilter(path.join(dir, entry.name));
+              } else if (entry.isFile() && audioExtensions.test(entry.name)) {
+                const filePath = path.join(dir, entry.name);
+                const fileName = entry.name;
+                
+                let match = true;
+                
+                if (!isPureMatch && filterRegex && !filterRegex.test(filePath) && !filterRegex.test(fileName)) {
+                  match = false;
+                }
+                
+                if (match && !isPureMatch && legacyMatchField && legacyMatchOp && legacyMatchValue !== null) {
+                  const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
+                  if (cached) {
+                    match = checkCondition(cached, legacyMatchField, legacyMatchOp, legacyMatchValue, filePath);
+                  } else {
+                    match = false;
+                  }
+                }
+                
+                if (match && isPureMatch && conditions.length > 0) {
+                  const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
+                  if (cached) {
+                    for (const cond of conditions) {
+                      if (!checkCondition(cached, cond.match_field, cond.match_op, cond.match_value, filePath)) {
+                        match = false;
+                        break;
+                      }
+                    }
+                  } else {
+                    match = false;
+                  }
+                }
+                
+                if (match) {
+                  trackPaths.push(filePath);
+                }
+              }
+            }
+          } catch (err) {
+            // 忽略无法读取的目录
+          }
+        }
+        scanForFilter(musicPath);
+      }
+    }
+  }
+
+  // 插入或更新音轨
+  const insertTrack = db.prepare('INSERT OR IGNORE INTO tracks (path, title, date_added) VALUES (?, ?, ?)');
+  const getTrack = db.prepare('SELECT id, duration, artist, album FROM tracks WHERE path = ?') as any;
+  const updateTrack = db.prepare('UPDATE tracks SET title = ?, artist = ?, album = ?, duration = ? WHERE id = ?');
+  const trackIds: number[] = [];
+  const seenTrackIds = new Set<number>();
+
+  for (const trackPath of trackPaths) {
+    const webdavMatch = trackPath.match(/^webdav:\/\/(\d+)(.*)$/);
+    
+    let title: string;
+    if (webdavMatch) {
+      title = path.basename(webdavMatch[2]).replace(/\.[^.]+$/, '');
+    } else {
+      title = getPathName(trackPath).replace(/\.[^.]+$/, '');
+    }
+    
+    insertTrack.run(trackPath, title, Date.now());
+    const track = getTrack.get(trackPath) as { id: number; duration: number | null; artist: string | null; album: string | null } | undefined;
+    if (track) {
+      if (track.duration === null && !webdavMatch) {
+        try {
+          const metadata = await parseFile(trackPath);
+          const metaTitle = metadata.common.title || title;
+          const artist = metadata.common.artist || null;
+          const album = metadata.common.album || null;
+          const duration = metadata.format.duration || null;
+          updateTrack.run(metaTitle, artist, album, duration, track.id);
+        } catch {
+          // 解析失败，保持原样
+        }
+      }
+      const trackId = track.id;
+      if (!seenTrackIds.has(trackId)) {
+        seenTrackIds.add(trackId);
+        trackIds.push(trackId);
+      }
+    }
+  }
+
+  // 清空旧的音轨关联，插入新的
+  db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(playlistId);
+  const insertPlaylistTrack = db.prepare('INSERT INTO playlist_tracks (playlist_id, track_id, "order") VALUES (?, ?, ?)');
+  trackIds.forEach((trackId, index) => {
+    insertPlaylistTrack.run(playlistId, trackId, index);
+  });
+
+  // 更新播放列表时间
+  db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), playlistId);
+
+  // 返回音轨列表（排除回收站）
+  const tracks = db.prepare(`
+    SELECT t.id, t.path, t.title, t.artist, t.album, t.duration, t.rating, t.play_count, t.skip_count, t.last_played, t.date_added
+    FROM tracks t
+    JOIN playlist_tracks pt ON t.id = pt.track_id
+    WHERE pt.playlist_id = ? AND (t.recycled = 0 OR t.recycled IS NULL)
+    ORDER BY pt."order"
+  `).all(playlistId);
+
+  return { tracks, total: tracks.length };
+}
 
 export async function playlistRoutes(app: FastifyInstance) {
   const db = getDatabase();
@@ -223,280 +479,82 @@ export async function playlistRoutes(app: FastifyInstance) {
     return { success: true };
   });
 
-  // 刷新播放列表（扫描所有项获取音轨列表）
+  // 刷新播放列表（异步扫描）
   app.post('/api/playlists/:id/refresh', async (req, reply) => {
     const { id } = req.params as { id: string };
+    const { immediate = false } = req.body as { immediate?: boolean };
 
     const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(Number(id)) as any;
     if (!playlist) {
       return reply.code(404).send({ error: '播放列表不存在' });
     }
 
-    const items = db.prepare('SELECT * FROM playlist_items WHERE playlist_id = ?').all(Number(id)) as any[];
+    const task_id = crypto.randomBytes(16).toString('hex');
+    const now = Date.now();
 
-    const audioExtensions = /\.(mp3|flac|wav|ogg|m4a|aac|wma|ape)$/i;
-    const trackPaths: string[] = [];
+    // 创建扫描任务
+    db.prepare(
+      'INSERT INTO scan_tasks (playlist_id, task_id, status, progress, total, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(Number(id), task_id, 'pending', 0, 0, now, now);
 
-    // WebDAV 客户端缓存
-    const webdavClients = new Map<number, any>();
-    
-    async function getWebdavClient(configId: number) {
-      if (!webdavClients.has(configId)) {
-        const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as any;
-        if (config) {
-          const client = createClient(config.url, {
-            username: config.username || undefined,
-            password: config.password || undefined
-          });
-          webdavClients.set(configId, client);
-        }
-      }
-      return webdavClients.get(configId);
+    // 如果 immediate=true，同步扫描（旧行为）
+    if (immediate) {
+      const result = await performScan(Number(id), db, app);
+      // 更新任务状态
+      db.prepare('UPDATE scan_tasks SET status = ?, progress = ?, total = ?, updated_at = ? WHERE task_id = ?')
+        .run('complete', result.total, result.total, Date.now(), task_id);
+      return { task_id, playlist, tracks: result.tracks };
     }
 
-    for (const item of items) {
-      if (item.type === 'file') {
-        if (audioExtensions.test(item.path)) {
-          trackPaths.push(item.path);
-        }
-      } else if (item.type === 'directory') {
-        const dirPath = item.path;
-        const includeSubdirs = item.include_subdirs === 1;
-        
-        // 检查是否是 WebDAV 路径
-        const webdavMatch = dirPath.match(/^webdav:\/\/(\d+)(.*)$/);
-        if (webdavMatch) {
-          // WebDAV 目录扫描
-          const configId = parseInt(webdavMatch[1], 10);
-          const webdavDir = webdavMatch[2];
-          const client = await getWebdavClient(configId);
-          
-          if (client) {
-            async function scanWebdavDir(dir: string) {
-              try {
-                const contents = await client.getDirectoryContents(dir);
-                for (const entry of contents as any[]) {
-                  if (entry.type === 'directory' && includeSubdirs) {
-                    await scanWebdavDir(entry.filename);
-                  } else if (entry.type === 'file' && audioExtensions.test(entry.basename)) {
-                    trackPaths.push(`webdav://${configId}${entry.filename}`);
-                  }
-                }
-              } catch (err) {
-                // 忽略无法读取的目录
-              }
-            }
-            await scanWebdavDir(webdavDir);
-          }
-        } else {
-          // 本地目录扫描
-          function scanDir(dir: string) {
-            try {
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const entry of entries) {
-                if (entry.isDirectory() && includeSubdirs) {
-                  scanDir(path.join(dir, entry.name));
-                } else if (entry.isFile() && audioExtensions.test(entry.name)) {
-                  trackPaths.push(path.join(dir, entry.name));
-                }
-              }
-            } catch (err) {
-              // 忽略无法读取的目录
-            }
-          }
-          scanDir(dirPath);
-        }
-      } else if (item.type === 'filter' || item.type === 'match') {
-        // 正则/匹配/过滤器：遍历所有音乐目录
-        const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
-        const musicPaths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
-        
-        // 获取该 item 的所有条件（AND 条件）
-        const conditions = item.type === 'match' 
-          ? (db.prepare('SELECT * FROM playlist_item_conditions WHERE item_id = ? ORDER BY "order"').all(item.id) as any[])
-          : [];
-        
-        const filterRegex = item.filter_regex ? new RegExp(item.filter_regex, 'i') : null;
-        const filterArtist = item.filter_artist;
-        const filterAlbum = item.filter_album;
-        const filterTitle = item.filter_title;
-        // 兼容旧的单条件字段
-        const legacyMatchField = item.match_field;
-        const legacyMatchOp = item.match_op;
-        const legacyMatchValue = item.match_value;
-        
-        // 是否为纯匹配类型（无正则）
-        const isPureMatch = item.type === 'match';
-
-        // 检查单个条件是否匹配
-        // filePathParam: 当检查 path 字段时使用此参数，否则从 cached 获取
-        function checkCondition(cached: any, condField: string, condOp: string, condValue: string, filePathParam?: string): boolean {
-          // path 字段使用传入的文件路径，其他字段从缓存获取
-          let fieldValue: any;
-          if (condField === 'path' && filePathParam !== undefined) {
-            fieldValue = filePathParam;
-          } else {
-            fieldValue = cached[condField];
-          }
-          
-          const numValue = parseFloat(condValue);
-          
-          switch (condOp) {
-            case '>':
-              if (typeof fieldValue === 'number') return fieldValue > numValue;
-              return false;
-            case '<':
-              if (typeof fieldValue === 'number') return fieldValue < numValue;
-              return false;
-            case '>=':
-              if (typeof fieldValue === 'number') return fieldValue >= numValue;
-              return false;
-            case '<=':
-              if (typeof fieldValue === 'number') return fieldValue <= numValue;
-              return false;
-            case '=':
-              return String(fieldValue || '') === String(condValue);
-            case 'contains':
-              if (condField === 'tags') {
-                try {
-                  const tags = cached.tags ? JSON.parse(cached.tags) : [];
-                  return tags.some((t: string) => t.includes(condValue));
-                } catch { return false; }
-              } else {
-                return String(fieldValue || '').includes(condValue);
-              }
-            case 'not_contains':
-              if (condField === 'tags') {
-                try {
-                  const tags = cached.tags ? JSON.parse(cached.tags) : [];
-                  return !tags.some((t: string) => t.includes(condValue));
-                } catch { return true; }
-              } else {
-                return !String(fieldValue || '').includes(condValue);
-              }
-            default:
-              return false;
-          }
-        }
-
-        // 扫描所有音乐目录
-        for (const musicPath of musicPaths) {
-          function scanForFilter(dir: string) {
-            try {
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const entry of entries) {
-                if (entry.isDirectory()) {
-                  scanForFilter(path.join(dir, entry.name));
-                } else if (entry.isFile() && audioExtensions.test(entry.name)) {
-                  const filePath = path.join(dir, entry.name);
-                  const fileName = entry.name;
-                  
-                  // 检查是否匹配所有过滤条件
-                  let match = true;
-                  
-                  // 正则匹配（filter 类型）
-                  if (!isPureMatch && filterRegex && !filterRegex.test(filePath) && !filterRegex.test(fileName)) {
-                    match = false;
-                  }
-                  
-                  // 兼容旧的单条件字段
-                  if (match && !isPureMatch && legacyMatchField && legacyMatchOp && legacyMatchValue !== null) {
-                    const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
-                    if (cached) {
-                      match = checkCondition(cached, legacyMatchField, legacyMatchOp, legacyMatchValue, filePath);
-                    } else {
-                      match = false;
-                    }
-                  }
-                  
-                  // 新的多条件 AND 匹配
-                  if (match && isPureMatch && conditions.length > 0) {
-                    const cached = db.prepare('SELECT * FROM tracks WHERE path = ?').get(filePath) as any;
-                    if (cached) {
-                      // 所有条件都必须满足 (AND)
-                      for (const cond of conditions) {
-                        if (!checkCondition(cached, cond.match_field, cond.match_op, cond.match_value, filePath)) {
-                          match = false;
-                          break;
-                        }
-                      }
-                    } else {
-                      match = false;
-                    }
-                  }
-                  
-                  if (match) {
-                    trackPaths.push(filePath);
-                  }
-                }
-              }
-            } catch (err) {
-              // 忽略无法读取的目录
-            }
-          }
-          scanForFilter(musicPath);
-        }
+    // 启动后台扫描（不等待完成）
+    (async () => {
+      try {
+        await performScan(Number(id), db, app);
+        db.prepare('UPDATE scan_tasks SET status = ?, progress = ?, updated_at = ? WHERE task_id = ?')
+          .run('complete', 100, Date.now(), task_id);
+      } catch (err) {
+        console.error('Scan task failed:', err);
+        db.prepare('UPDATE scan_tasks SET status = ?, error = ?, updated_at = ? WHERE task_id = ?')
+          .run('failed', String(err), Date.now(), task_id);
       }
+    })();
+
+    return { task_id };
+  });
+
+  // 获取扫描任务状态
+  app.get('/api/scan/tasks/:taskId', async (req, reply) => {
+    const { taskId } = req.params as { taskId: string };
+
+    const task = db.prepare('SELECT * FROM scan_tasks WHERE task_id = ?').get(taskId) as any;
+    if (!task) {
+      return reply.code(404).send({ error: '任务不存在' });
     }
 
-    // 插入或更新音轨
-    const insertTrack = db.prepare('INSERT OR IGNORE INTO tracks (path, title, date_added) VALUES (?, ?, ?)');
-    const getTrack = db.prepare('SELECT id, duration, artist, album FROM tracks WHERE path = ?') as any;
-    const updateTrack = db.prepare('UPDATE tracks SET title = ?, artist = ?, album = ?, duration = ? WHERE id = ?');
-    const trackIds: number[] = [];
+    return task;
+  });
 
-    for (const trackPath of trackPaths) {
-      // WebDAV 文件路径格式: webdav://{configId}{filePath}
-      const webdavMatch = trackPath.match(/^webdav:\/\/(\d+)(.*)$/);
-      
-      // 提取标题（去掉扩展名）
-      let title: string;
-      if (webdavMatch) {
-        // WebDAV 文件：从路径提取文件名
-        title = path.basename(webdavMatch[2]).replace(/\.[^.]+$/, '');
-      } else {
-        title = path.basename(trackPath).replace(/\.[^.]+$/, '');
-      }
-      
-      insertTrack.run(trackPath, title, Date.now());
-      const track = getTrack.get(trackPath) as { id: number; duration: number | null; artist: string | null; album: string | null } | undefined;
-      if (track) {
-        // 本地文件且 duration 为空，解析元数据
-        // WebDAV 文件不在此处解析元数据（播放时再获取）
-        if (track.duration === null && !webdavMatch) {
-          try {
-            const metadata = await parseFile(trackPath);
-            const metaTitle = metadata.common.title || title;
-            const artist = metadata.common.artist || null;
-            const album = metadata.common.album || null;
-            const duration = metadata.format.duration || null;
-            updateTrack.run(metaTitle, artist, album, duration, track.id);
-          } catch {
-            // 解析失败，保持原样
-          }
-        }
-        trackIds.push(track.id);
-      }
+  // 获取扫描结果（任务完成后）
+  app.get('/api/scan/tasks/:taskId/result', async (req, reply) => {
+    const { taskId } = req.params as { taskId: string };
+
+    const task = db.prepare('SELECT * FROM scan_tasks WHERE task_id = ?').get(taskId) as any;
+    if (!task) {
+      return reply.code(404).send({ error: '任务不存在' });
     }
 
-    // 清空旧的音轨关联，插入新的
-    db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(Number(id));
-    const insertPlaylistTrack = db.prepare('INSERT INTO playlist_tracks (playlist_id, track_id, "order") VALUES (?, ?, ?)');
-    trackIds.forEach((trackId, index) => {
-      insertPlaylistTrack.run(Number(id), trackId, index);
-    });
+    if (task.status !== 'complete') {
+      return reply.code(400).send({ error: `任务状态: ${task.status}` });
+    }
 
-    // 更新播放列表时间
-    db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), Number(id));
-
-    // 返回音轨列表（排除回收站）
+    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(task.playlist_id) as any;
     const tracks = db.prepare(`
       SELECT t.id, t.path, t.title, t.artist, t.album, t.duration, t.rating, t.play_count, t.skip_count, t.last_played, t.date_added
       FROM tracks t
       JOIN playlist_tracks pt ON t.id = pt.track_id
       WHERE pt.playlist_id = ? AND (t.recycled = 0 OR t.recycled IS NULL)
       ORDER BY pt."order"
-    `).all(Number(id));
+    `).all(task.playlist_id);
 
     return { playlist, tracks };
   });
@@ -649,6 +707,31 @@ export async function playlistRoutes(app: FastifyInstance) {
     return { success: true };
   });
 
+  // 添加音轨到播放列表（直接关联 track，不创建来源项）
+  app.post('/api/playlists/:id/add-track', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { trackId } = req.body as { trackId: number };
+
+    if (!trackId) {
+      return reply.code(400).send({ error: '缺少 trackId 参数' });
+    }
+
+    // 检查是否已存在
+    const existing = db.prepare('SELECT id FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').get(Number(id), trackId);
+    if (existing) {
+      return reply.code(400).send({ error: '音轨已存在于播放列表中' });
+    }
+
+    // 获取当前最大 order
+    const maxOrder = db.prepare('SELECT MAX("order") as max_order FROM playlist_tracks WHERE playlist_id = ?').get(Number(id)) as { max_order: number | null };
+    const order = (maxOrder?.max_order ?? -1) + 1;
+
+    db.prepare('INSERT INTO playlist_tracks (playlist_id, track_id, "order") VALUES (?, ?, ?)').run(Number(id), trackId, order);
+    db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), Number(id));
+
+    return { success: true, order };
+  });
+
   // ============ 条件管理 API (AND 条件) ============
 
   // 获取来源项的所有条件
@@ -771,7 +854,7 @@ export async function playlistRoutes(app: FastifyInstance) {
         let track = db.prepare('SELECT id FROM tracks WHERE path = ?').get(trackPath) as { id: number } | undefined;
         if (!track) {
           // 插入新音轨
-          const title = path.basename(trackPath).replace(/\.[^.]+$/, '');
+          const title = getPathName(trackPath).replace(/\.[^.]+$/, '');
           const insertResult = db.prepare(
             'INSERT INTO tracks (path, title, date_added) VALUES (?, ?, ?)'
           ).run(trackPath, title, now);

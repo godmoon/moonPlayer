@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'fs';
 import path from 'path';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
 
 export async function filesRoutes(app: FastifyInstance) {
   const db = getDatabase();
@@ -43,7 +43,7 @@ export async function filesRoutes(app: FastifyInstance) {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
     const paths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
     const roots = paths.map((p: string) => ({
-      name: p.split('/').filter(Boolean).pop() || p,
+      name: getPathName(p),
       path: p
     }));
     return { roots };
@@ -60,7 +60,7 @@ export async function filesRoutes(app: FastifyInstance) {
     // 如果没有指定目录，返回根目录列表
     if (!dir) {
       const roots = rootPaths.map((p: string) => {
-        const name = p.split('/').filter(Boolean).pop() || p;
+        const name = getPathName(p);
         try {
           const stat = fs.statSync(p);
           return {

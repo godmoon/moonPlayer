@@ -1,6 +1,6 @@
 // 播放列表详情组件
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { getPlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, getPlaylistHistory, updatePlaylistItem, removePlaylistItem, recordHistory, getPlaylistTracks } from '../../stores/api';
+import { getPlaylist, refreshPlaylist, updatePlaylist, setSkipSettings, getPlaylistHistory, updatePlaylistItem, removePlaylistItem, recordHistory, getPlaylistTracks, pollScanTask, getScanTaskResult } from '../../stores/api';
 import { usePlayerStore } from '../../stores/playerStore';
 import type { Track, Playlist } from '../../stores/playerStore';
 import { AddSourceModal } from './AddSourceModal';
@@ -205,28 +205,86 @@ export function PlaylistDetail({ playlistId, onClose }: {
 
   const handleRefreshAndPlay = async () => {
     setRefreshing(true);
+    const startTime = Date.now();
+    
     try {
-      const result = await refreshPlaylist(playlistId);
-      setTracks(result.tracks || []);
-      if (result.tracks && result.tracks.length > 0) {
-        const pl: Playlist = {
-          id: playlistId,
-          name: result.playlist.name,
-          createdAt: result.playlist.created_at,
-          updatedAt: result.playlist.updated_at,
-          isAuto: result.playlist.is_auto === 1,
-          playMode: result.playlist.play_mode,
-          skipIntro: result.playlist.skip_intro,
-          skipOutro: result.playlist.skip_outro
-        };
-        setCurrentPlaylist(pl, result.tracks);
-        setCurrentTrack(result.tracks[0]);
-        setIsPlaying(true);
+      const result = await refreshPlaylist(playlistId, false);
+      
+      if (result.task_id) {
+        // 异步扫描：轮询进度
+        let pollTask = await pollScanTask(result.task_id);
+        const statusEl = document.getElementById('scan-status');
+        
+        while (pollTask.status === 'pending' && Date.now() - startTime < 10000) {
+          await new Promise(r => setTimeout(r, 500));
+          pollTask = await pollScanTask(result.task_id);
+          if (statusEl) {
+            statusEl.textContent = `扫描中: ${pollTask.progress}% (${pollTask.total} 首)`;
+          }
+        }
+        
+        // 等待扫描完成（最多等待 20 秒）
+        let finalResult = pollTask;
+        let waitCount = 0;
+        while ((finalResult.status === 'pending' && waitCount < 40) || finalResult.status === 'scanning') {
+          await new Promise(r => setTimeout(r, 500));
+          finalResult = await pollScanTask(result.task_id);
+          waitCount++;
+          if (statusEl) {
+            statusEl.textContent = `扫描中: ${finalResult.progress}% (${finalResult.total} 首)`;
+          }
+        }
+        
+        if (finalResult.status === 'failed') {
+          throw new Error(finalResult.error || '扫描失败');
+        }
+        
+        // 获取结果
+        const taskResult = await getScanTaskResult(result.task_id);
+        setTracks(taskResult.tracks || []);
+        if (taskResult.tracks && taskResult.tracks.length > 0) {
+          const pl: Playlist = {
+            id: playlistId,
+            name: taskResult.playlist.name,
+            createdAt: taskResult.playlist.created_at,
+            updatedAt: taskResult.playlist.updated_at,
+            isAuto: taskResult.playlist.is_auto === 1,
+            playMode: taskResult.playlist.play_mode,
+            skipIntro: taskResult.playlist.skip_intro,
+            skipOutro: taskResult.playlist.skip_outro
+          };
+          setCurrentPlaylist(pl, taskResult.tracks);
+          setCurrentTrack(taskResult.tracks[0]);
+          setIsPlaying(true);
+        }
+      } else {
+        // 同步扫描（immediate=true）
+        setTracks(result.tracks || []);
+        if (result.tracks && result.tracks.length > 0) {
+          const pl: Playlist = {
+            id: playlistId,
+            name: result.playlist.name,
+            createdAt: result.playlist.created_at,
+            updatedAt: result.playlist.updated_at,
+            isAuto: result.playlist.is_auto === 1,
+            playMode: result.playlist.play_mode,
+            skipIntro: result.playlist.skip_intro,
+            skipOutro: result.playlist.skip_outro
+          };
+          setCurrentPlaylist(pl, result.tracks);
+          setCurrentTrack(result.tracks[0]);
+          setIsPlaying(true);
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('刷新播放列表失败:', err);
+      alert(err.message || '刷新失败');
     } finally {
       setRefreshing(false);
+      const statusEl = document.getElementById('scan-status');
+      if (statusEl) {
+        statusEl.textContent = '';
+      }
     }
   };
 
@@ -295,8 +353,9 @@ export function PlaylistDetail({ playlistId, onClose }: {
         <div className="flex gap-2">
           <button onClick={() => setShowSettings(true)} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">⚙️ 设置</button>
           <button onClick={handleRefreshAndPlay} disabled={refreshing} className="px-3 py-1 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded text-sm">
-            {refreshing ? '刷新中...' : '🔄 重新扫描'}
+            {refreshing ? '🔄 扫描中...' : '🔄 重新扫描'}
           </button>
+          <span id="scan-status" className="px-2 py-1 text-xs text-gray-400"></span>
           <button onClick={onClose} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">返回</button>
         </div>
       </div>

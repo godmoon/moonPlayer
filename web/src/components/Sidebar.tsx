@@ -1,5 +1,5 @@
 // 侧边栏组件
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getNavOrder, setNavOrder } from '../stores/api';
 
 type Tab = 'browse' | 'playlists' | 'settings' | 'search';
@@ -161,7 +161,7 @@ export function Sidebar({ activeTab, onTabChange }: {
       `}>
         {/* Logo / 收缩按钮 */}
         <div className="p-2 md:p-3 border-b border-gray-700 flex items-center justify-between">
-          {!collapsed && <h1 className="text-lg font-bold text-purple-400">🎵 moonPlayer</h1>}
+          {!collapsed && <h1 className="text-lg font-bold text-purple-400">MoonPlayer</h1>}
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="text-gray-400 hover:text-white p-1"
@@ -208,7 +208,7 @@ export function Sidebar({ activeTab, onTabChange }: {
         {!collapsed && (
           <div className="p-2 md:p-3 text-xs text-gray-600 border-t border-gray-700">
             <div className="mb-1 text-gray-500">拖拽导航可排序</div>
-            moonPlayer v1.0.0
+            MoonPlayer v1.0.0
           </div>
         )}
       </div>

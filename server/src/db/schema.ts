@@ -19,6 +19,13 @@ export function normalizePath(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
+// 获取路径的最后一部分名称（兼容 Windows 和 Unix）
+export function getPathName(p: string): string {
+  const normalized = p.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || p;
+}
+
 // 将查询结果转换为数组
 function resultsToArray(results: any[]): any[] {
   if (!results || results.length === 0) return [];
@@ -374,6 +381,25 @@ function initTables(db: Database) {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_item_conditions_item ON playlist_item_conditions(item_id)`);
+
+  // 扫描任务表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scan_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      playlist_id INTEGER NOT NULL,
+      task_id TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'scanning', 'complete', 'failed')),
+      progress INTEGER DEFAULT 0,
+      total INTEGER DEFAULT 0,
+      current_path TEXT,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_scan_tasks_playlist ON scan_tasks(playlist_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_scan_tasks_status ON scan_tasks(status)`);
 }
 
 // 数据库迁移

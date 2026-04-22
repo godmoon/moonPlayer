@@ -101,8 +101,25 @@ export async function removeItemCondition(playlistId: number, itemId: number, co
   await api.delete(`/playlists/${playlistId}/items/${itemId}/conditions/${conditionId}`);
 }
 
-export async function refreshPlaylist(playlistId: number): Promise<{ playlist: any; tracks: any[] }> {
-  const res = await api.post(`/playlists/${playlistId}/refresh`);
+export async function refreshPlaylist(playlistId: number, immediate = false): Promise<{ task_id?: string; playlist?: any; tracks?: any[] }> {
+  const res = await api.post(`/playlists/${playlistId}/refresh`, { immediate });
+  return res.data;
+}
+
+// 异步扫描：轮询任务状态
+export async function pollScanTask(taskId: string): Promise<{ status: string; progress: number; total: number; error?: string }> {
+  const res = await api.get(`/scan/tasks/${taskId}`);
+  return res.data;
+}
+
+// 异步扫描：获取结果（完成后）
+export async function getScanTaskResult(taskId: string): Promise<{ playlist: any; tracks: any[] }> {
+  const res = await api.get(`/scan/tasks/${taskId}/result`);
+  return res.data;
+}
+
+export async function addPlaylistTrack(playlistId: number, trackId: number): Promise<{ success: boolean; order: number }> {
+  const res = await api.post(`/playlists/${playlistId}/add-track`, { trackId });
   return res.data;
 }
 

@@ -1,6 +1,7 @@
 // 添加到播放列表的弹窗组件
 import { useState, useEffect } from 'react';
 import { getPlaylists, addPlaylistItem } from '../stores/api';
+import { getFileName } from '../utils/format';
 
 interface Props {
   trackPath: string;
@@ -56,7 +57,7 @@ export function AddToPlaylistModal({ trackPath, onClose }: Props) {
 
         {/* 文件名 */}
         <div className="px-4 py-2 bg-gray-700/50 text-sm text-gray-400 truncate">
-          {trackPath.split('/').pop()}
+          {getFileName(trackPath)}
         </div>
 
         {/* 播放列表 */}

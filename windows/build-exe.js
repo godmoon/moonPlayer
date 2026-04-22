@@ -46,22 +46,27 @@ try {
   process.exit(1);
 }
 
-// 2. 安装 pkg
+// 2. 构建 web frontend (必须先构建)
+console.log('\n构建 web frontend...');
+execSync('npm install', { cwd: WEB_DIR, stdio: 'inherit' });
+execSync('npm run build', { cwd: WEB_DIR, stdio: 'inherit' });
+
+// 3. 安装 pkg
 console.log('\n安装打包工具...');
 execSync('npm install @yao-pkg/pkg --save-dev', { cwd: SERVER_DIR, stdio: 'inherit' });
 
-// 3. 构建 TypeScript
+// 4. 构建 TypeScript
 console.log('\n构建 TypeScript...');
 execSync('npm run build', { cwd: SERVER_DIR, stdio: 'inherit' });
 
-// 4. 打包 EXE
+// 5. 打包 EXE
 console.log('\n打包 EXE...');
 execSync('npx pkg . --targets node18-win-x64 --output ../moonplayer-server.exe --compress GZip', { 
   cwd: SERVER_DIR, 
   stdio: 'inherit' 
 });
 
-// 5. 创建输出目录
+// 6. 创建输出目录
 console.log('\n准备发布包...');
 mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -95,7 +100,7 @@ if (existsSync(webDistSrc)) {
   copyDir(webDistSrc, webDistDest);
 }
 
-// 6. 创建启动脚本
+// 7. 创建启动脚本
 writeFileSync(join(OUTPUT_DIR, 'start.bat'), `@echo off
 chcp 65001 >nul
 cd /d "%~dp0"
@@ -116,7 +121,7 @@ if errorlevel 1 (
 )
 `);
 
-// 7. 创建说明文件
+// 8. 创建说明文件
 writeFileSync(join(OUTPUT_DIR, 'README.txt'), `moonPlayer for Windows
 =====================
 

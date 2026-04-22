@@ -1,9 +1,20 @@
 // 格式化工具函数
 
-// 获取文件名（从路径中提取）
+// 获取文件名（从路径中提取，兼容 Windows 和 Unix 路径）
 export function getFileName(filePath: string): string {
-  const parts = filePath.split('/');
+  // 同时处理 / 和 \ 分隔符
+  const normalized = filePath.replace(/\\/g, '/');
+  const parts = normalized.split('/');
   return parts[parts.length - 1] || filePath;
+}
+
+// 获取父目录名（从路径中提取，兼容 Windows 和 Unix 路径）
+export function getParentDirName(filePath: string): string {
+  // 同时处理 / 和 \\ 分隔符
+  const normalized = filePath.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  // 返回倒数第二个部分（父目录名），如果没有则返回路径本身
+  return parts.length > 1 ? parts[parts.length - 2] : parts[0] || filePath;
 }
 
 // 需要 FFmpeg 支持的格式（浏览器不原生支持）

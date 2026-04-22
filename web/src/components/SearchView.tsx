@@ -5,6 +5,7 @@ import { usePlayerStore } from '../stores/playerStore';
 import type { Track } from '../stores/playerStore';
 import { createPlaylistObject } from './FileBrowser/utils';
 import { MATCH_FIELDS, MATCH_OP_LABELS } from './PlaylistManager/utils';
+import { getFileName, getParentDirName } from '../utils/format';
 
 // 高亮匹配文本
 function highlightMatch(text: string, query: string): React.ReactNode {
@@ -175,8 +176,9 @@ export function SearchView() {
   const handlePlayFile = async (track: any) => {
     const filePath = track.path;
     
-    // 从路径提取父目录
-    const pathParts = filePath.split('/');
+    // 从路径提取父目录（兼容 Windows 和 Unix 路径）
+    const normalized = filePath.replace(/\\/g, '/');
+    const pathParts = normalized.split('/');
     const parentDir = pathParts.slice(0, -1).join('/');
     
     try {
@@ -208,7 +210,7 @@ export function SearchView() {
         }
       } else {
         // 创建以父目录名命名的播放列表
-        const playlistName = parentDir.split('/').filter(Boolean).pop() || '临时播放列表';
+        const playlistName = getParentDirName(parentDir) || '临时播放列表';
         playlist = await createPlaylist(playlistName, [
           { type: 'directory', path: parentDir, includeSubdirs: false }
         ], true);
@@ -371,7 +373,7 @@ export function SearchView() {
                 <span className="text-green-500">🎵</span>
                 <div className="flex-1 min-w-0">
                   <div className="truncate text-sm">
-                    {highlightMatch(track.title || track.path.split('/').pop() || '', query)}
+                    {highlightMatch(track.title || getFileName(track.path), query)}
                   </div>
                   {track.artist && (
                     <div className="text-xs text-gray-400 truncate">

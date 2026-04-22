@@ -54,9 +54,9 @@ export function PlayerBar() {
   // 更新页面标题为当前播放歌曲
   useEffect(() => {
     if (currentTrack) {
-      document.title = `${formatTrackTitle(currentTrack)} - moonPlayer`;
+      document.title = `${formatTrackTitle(currentTrack)} - MoonPlayer`;
     } else {
-      document.title = 'moonPlayer';
+      document.title = 'MoonPlayer';
     }
   }, [currentTrack]);
 

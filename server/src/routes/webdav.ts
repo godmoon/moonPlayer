@@ -187,6 +187,7 @@ export async function webdavRoutes(app: FastifyInstance) {
 
       return {
         currentPath: targetPath,
+        // WebDAV URL 本身用 / 分隔，不需要兼容 Windows 路径
         parentPath: targetPath !== '/' ? targetPath.split('/').slice(0, -1).join('/') || '/' : null,
         directories,
         files,

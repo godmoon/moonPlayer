@@ -70,7 +70,7 @@ Web 端音乐播放器，支持多种播放模式、评分系统、WebDAV 远程
 
 ## 技术栈
 
-**后端：** Node.js + Fastify + SQLite (better-sqlite3)
+**后端：** Node.js + Fastify + SQLite (better-sqlite3 / sql.js WASM)
 **前端：** React + Vite + Tailwind CSS + Zustand
 **音频：** HTML5 Audio API + Media Session API
 
@@ -142,7 +142,7 @@ pm2 startup && pm2 save
 ## 系统要求
 
 | 依赖      | 版本    | 说明                  |
-| ------- | ----- | ------------------- |
+| --------- | ----- | ------------------- |
 | Node.js | >= 18 | 运行环境                |
 | FFmpeg  | 可选    | 转码 WMA/APE/FLAC 等格式 |
 
@@ -212,7 +212,9 @@ npm run cli clear-admin    # 清除管理员密码
 ### 播放列表
 
 - `GET/POST /api/playlists` - 播放列表 CRUD
-- `POST /api/playlists/:id/refresh` - 刷新音轨列表
+- `POST /api/playlists/:id/refresh` - 刷新音轨列表（支持异步）
+- `GET /api/scan/tasks/:taskId` - 查询扫描任务状态
+- `GET /api/scan/tasks/:taskId/result` - 获取扫描结果（完成后）
 
 ### 音轨
 
@@ -277,7 +279,9 @@ pm2 logs moonplayer-server --lines 100
 **关键文件:**
 - `server/src/routes/stream.ts` - 音频流传输（含品质转码）
 - `server/src/routes/tracks.ts` - 音轨 API
+- `server/src/routes/playlists.ts` - 播放列表管理（含异步扫描）
 - `web/src/stores/playerStore.ts` - 播放器状态
+- `web/src/stores/api.ts` - API 调用封装
 - `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件
 
 **常用命令:**
@@ -292,6 +296,11 @@ pm2 restart moonplayer-server  # 重启服务
 **播放模式:** 顺序 / 随机 / 权重随机 / 乱序 / 单曲循环
 
 **评分:** 完整听完+1分，快切-1分，手工👍👎
+
+**异步扫描:**
+- 创建播放列表或重新扫描时，支持异步任务（默认）
+- 可选 `immediate=true` 使用同步扫描（旧模式）
+- 扫描进度通过轮询 `/api/scan/tasks/:taskId` 获取
 
 ## License
 

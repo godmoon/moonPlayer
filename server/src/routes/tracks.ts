@@ -1,6 +1,6 @@
 // 音轨路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
 import { parseFile, parseBuffer } from 'music-metadata';
 import { createClient } from 'webdav';
 import fs from 'fs';
@@ -66,10 +66,10 @@ export async function trackRoutes(app: FastifyInstance) {
 
         // 获取文件信息
         const stat = fs.statSync(filePath);
-        const filename = path.basename(filePath);
+        const filename = getPathName(filePath);
 
         // 尝试解析元数据
-        let title = path.basename(filename, path.extname(filename));
+        let title = path.posix.basename(filename, path.extname(filename));
         let artist: string | undefined;
         let album: string | undefined;
         let duration: number | undefined;
@@ -637,7 +637,7 @@ export async function trackRoutes(app: FastifyInstance) {
           try {
             // 解析元数据
             const metadata = await parseFile(fullPath, { duration: false });
-            const fileName = path.basename(fullPath, ext);
+            const fileName = getPathName(fullPath).replace(/\.[^.]+$/, '');
 
             const title = metadata.common.title || fileName;
             const artist = metadata.common.artist || undefined;
@@ -704,7 +704,8 @@ export async function trackRoutes(app: FastifyInstance) {
 
                 stats.scanned++;
                 const webdavPath = `webdav://${config.id}${entry.filename}`;
-                const fileName = path.basename(entry.basename, ext);
+                // WebDAV entry.basename 已经是文件名（不含路径）
+                const fileName = entry.basename.replace(/\.[^.]+$/, '');
 
                 // 检查是否已存在
                 const existing = db.prepare('SELECT id FROM tracks WHERE path = ?').get(webdavPath);

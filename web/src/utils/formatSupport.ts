@@ -160,7 +160,7 @@ export function encodeFormatSupport(): string {
  */
 export function logFormatSupport(): void {
   const support = detectFormatSupport();
-  console.log('[moonPlayer] 浏览器格式支持检测:');
+  console.log('[MoonPlayer] 浏览器格式支持检测:');
   console.log(`  FLAC: ${support.flac ? '✅' : '❌'}`);
   console.log(`  WAV:  ${support.wav ? '✅' : '❌'}`);
   console.log(`  AAC:  ${support.aac ? '✅' : '❌'}`);

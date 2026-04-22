@@ -435,7 +435,7 @@ export function Settings() {
       <div className="border-t border-gray-700 pt-4">
         <h3 className="font-medium mb-2">关于</h3>
         <p className="text-sm text-gray-400">
-          moonPlayer - Web 音乐播放器<br/>
+          MoonPlayer - Web 音乐播放器<br/>
           支持多种播放模式、评分系统、播放列表管理、WebDAV<br/>
           <br/>
           技术栈: React + Fastify + SQLite

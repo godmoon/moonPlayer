@@ -4,6 +4,7 @@ import { browseDirectory, scanTracks, createPlaylist, refreshPlaylist, findPlayl
 import { usePlayerStore } from '../../stores/playerStore';
 import type { Track } from '../../stores/playerStore';
 import { type FileNode, type BrowseResult, convertWebdavTracks, createPlaylistObject } from './utils';
+import { getFileName } from '../../utils/format';
 
 export function FileBrowser({ onPlay, onRecycleBin }: {
   onPlay: (path: string) => void;
@@ -81,14 +82,28 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
 
       if (existing.playlist) {
         playlist = existing.playlist;
+        // 先刷新获取现有音轨列表
         const refreshed = await refreshPlaylist(playlist.id);
         let trackList = refreshed.tracks as Track[];
 
         const existingTrack = trackList.find((t: Track) => t.id === trackId);
         if (!existingTrack) {
-          await (await import('../../stores/api')).addPlaylistItem(playlist.id, 'file', path, false);
-          const refreshed2 = await refreshPlaylist(playlist.id);
-          trackList = refreshed2.tracks as Track[];
+          // 添加单个文件到播放列表（不创建新来源项，直接关联 track）
+          await (await import('../../stores/api')).addPlaylistTrack(playlist.id, trackId);
+          // 从 scanTracks 结果中获取新音轨信息（因为 refreshed.tracks 不会包含新添加的音轨）
+          const newTrack: Track = {
+            id: trackId,
+            path: path,
+            title: path.split('/').pop()?.replace(/\.[^.]+$/, '') || '未知曲目',
+            artist: undefined,
+            album: undefined,
+            duration: undefined,
+            rating: 0,
+            playCount: 0,
+            skipCount: 0,
+            dateAdded: Date.now()
+          };
+          trackList = [...trackList, newTrack];
         }
 
         if (trackList.length > 0) {
@@ -98,7 +113,7 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
           setIsPlaying(true);
         }
       } else {
-        const playlistName = currentPath.split('/').filter(Boolean).pop() || '临时播放列表';
+        const playlistName = getFileName(currentPath) || '临时播放列表';
         playlist = await createPlaylist(playlistName, [
           { type: 'directory', path: currentPath, includeSubdirs: false }
         ], true);
@@ -127,7 +142,7 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
     try {
       const result = await scanWebdavDirectory(currentWebdav.id, {
         dir: currentPath,
-        playlistName: currentWebdav.name + ': ' + (currentPath.split('/').filter(Boolean).pop() || '根目录'),
+        playlistName: currentWebdav.name + ': ' + (getFileName(currentPath) || '根目录'),
         includeSubdirs: false
       });
       
@@ -164,7 +179,7 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
         return;
       }
       
-      const playlistName = dirPath.split('/').filter(Boolean).pop() || '目录播放列表';
+      const playlistName = getFileName(dirPath) || '目录播放列表';
       const playlist = await createPlaylist(playlistName, [
         { type: 'directory', path: dirPath, includeSubdirs: true }
       ], true);
@@ -187,7 +202,7 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
     if (!currentWebdav) return;
     
     try {
-      const dirName = dirPath.split('/').filter(Boolean).pop() || '根目录';
+      const dirName = getFileName(dirPath) || '根目录';
       const result = await scanWebdavDirectory(currentWebdav.id, {
         dir: dirPath,
         playlistName: currentWebdav.name + ': ' + dirName,
@@ -234,8 +249,8 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
   const handleOpenAddModal = async (type: 'directory' | 'file', path: string) => {
     // 简化：直接使用 window 确认
     const playlistName = type === 'directory'
-      ? path.split('/').filter(Boolean).pop() || '新播放列表'
-      : currentPath.split('/').filter(Boolean).pop() || '新播放列表';
+      ? getFileName(path) || '新播放列表'
+      : getFileName(currentPath) || '新播放列表';
     
     const name = prompt('输入播放列表名称:', playlistName);
     if (!name) return;

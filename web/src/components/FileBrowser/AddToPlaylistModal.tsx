@@ -1,6 +1,7 @@
 // 添加到播放列表弹窗组件
 import { useState } from 'react';
 import { getPlaylists, createPlaylist, addPlaylistItem, refreshPlaylist } from '../../stores/api';
+import { getParentDirName } from '../../utils/format';
 
 interface AddToPlaylistModalProps {
   targetType: 'directory' | 'file';
@@ -21,8 +22,8 @@ export function AddToPlaylistModal({ targetType, targetPath, currentPath, onClos
         const list = await getPlaylists();
         setPlaylists(list);
         const defaultName = targetType === 'directory'
-          ? targetPath.split('/').filter(Boolean).pop() || '新播放列表'
-          : currentPath?.split('/').filter(Boolean).pop() || '新播放列表';
+          ? getParentDirName(targetPath) || '新播放列表'
+          : getParentDirName(currentPath || '') || '新播放列表';
         setNewPlaylistName(defaultName);
       } catch (err) {
         console.error('加载播放列表失败:', err);

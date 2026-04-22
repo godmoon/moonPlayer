@@ -1,4 +1,4 @@
-// moonPlayer 主应用
+// MoonPlayer 主应用
 import { useState, useEffect } from 'react';
 import { Sidebar, Tab } from './components/Sidebar';
 import { FileBrowser } from './components/FileBrowser/FileBrowser';

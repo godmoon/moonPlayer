@@ -28,7 +28,17 @@ if errorlevel 1 (
     echo.
     echo You can download ffmpeg from: https://ffmpeg.org/download.html
     echo.
-    pause
+)
+
+echo.
+echo [0/5] Stopping existing moonPlayer server...
+
+tasklist | findstr /I "moonplayer-server.exe" >nul
+if %errorlevel%==0 (
+    taskkill /F /IM moonplayer-server.exe /T >nul 2>&1
+    echo Existing server stopped.
+) else (
+    echo No running server found.
 )
 
 :: Switch to server directory
@@ -52,6 +62,24 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+
+:: Build web frontend first (must be done before bundling)
+echo.
+echo [2.5] Building web frontend...
+cd /d "..\web"
+call npm install
+if errorlevel 1 (
+    echo [ERROR] Web npm install failed
+    pause
+    exit /b 1
+)
+call npm run build
+if errorlevel 1 (
+    echo [ERROR] Web build failed
+    pause
+    exit /b 1
+)
+cd /d "..\server"
 
 :: Build TypeScript first
 echo.
@@ -105,27 +133,43 @@ echo Copying additional files...
 :: Copy WASM to output
 copy /Y "node_modules\sql.js\dist\sql-wasm.wasm" "..\windows\build-exe\sql-wasm.wasm" >nul
 
-:: Copy web/dist
+:: Copy web/dist (from server directory, so it's ..\web\dist)
 if exist "..\web\dist" (
     if not exist "..\windows\build-exe\web\dist" mkdir "..\windows\build-exe\web\dist"
     xcopy /E /I /Y "..\web\dist\*" "..\windows\build-exe\web\dist\" >nul
 )
 
-:: Create start script
-(
-echo @echo off
-echo chcp 65001 ^>nul
-echo cd /d "%%~dp0"
-echo title moonPlayer Server
-echo echo.
-echo echo Starting moonPlayer...
-echo moonplayer-server.exe
-echo if errorlevel 1 ^(
-echo     echo [ERROR] Start failed!
-echo     pause
-echo     exit /b 1
-echo ^)
-) > "..\windows\build-exe\start.bat"
+if not exist "..\windows\build-exe\start.bat" (
+    (
+    echo @echo off
+    echo chcp 65001 ^>nul
+    echo cd /d "%%~dp0"
+    echo title moonPlayer Server
+    echo echo.
+    echo echo Starting moonPlayer...
+    echo set PORT=3000
+    echo moonplayer-server.exe
+    echo if errorlevel 1 ^(
+    echo     echo [ERROR] Start failed!
+    echo     pause
+    echo     exit /b 1
+    echo ^)
+    ) > "..\windows\build-exe\start.bat"
+)
+
+if not exist "..\windows\build-exe\run_hidden.vbs" (
+    (
+        echo Set WshShell = CreateObject^("WScript.Shell"^)
+        echo Set fso = CreateObject^("Scripting.FileSystemObject"^)
+        echo currentDir = fso.GetParentFolderName^(WScript.ScriptFullName^)
+        echo PORT = "3000"
+        echo exePath = """" ^& currentDir ^& "\moonplayer-server.exe"""
+        echo logPath = """" ^& currentDir ^& "\run.log"""
+        echo cmd = "cmd /c set PORT=" ^& PORT ^& " && " ^& exePath ^& " > " ^& logPath ^& " 2>&1"
+        echo WshShell.Run cmd, 0, False
+    ) > "..\windows\build-exe\run_hidden.vbs"
+)
+
 
 :: Create README
 (
@@ -152,4 +196,19 @@ echo ===================================
 echo.
 echo Output: ..\windows\build-exe\
 echo.
+
+:: Run hidden startup script
+set "SCRIPT_DIR=%~dp0"
+set "VBS_PATH=%SCRIPT_DIR%..\windows\build-exe\run_hidden.vbs"
+
+echo Checking: %VBS_PATH%
+
+if exist "%VBS_PATH%" (
+    echo Found VBS, launching...
+    cscript "%VBS_PATH%"
+    echo Done.
+) else (
+    echo [ERROR] VBS not found!
+)
+
 pause
