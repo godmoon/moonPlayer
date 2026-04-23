@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { parseWebdavPath, downloadWebdavFile, getWebdavCachePath, needsTranscode, ensureCacheDir, getTranscodeCachePath, getWebdavConfig, getWebdavClient } from '../utils/webdavCache.js';
 import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 
 // 获取当前文件所在目录（兼容 pkg 打包）
 function getDirname(): string {
@@ -15,11 +16,26 @@ function getDirname(): string {
     return path.dirname(process.execPath);
   }
   // ESM 环境
+  if (typeof import.meta === 'object' && import.meta.url && typeof import.meta.url === 'string') {
+    let pathname = fileURLToPath(import.meta.url);
+    if (process.platform === 'win32' && pathname.startsWith('/')) {
+      pathname = pathname.substring(1);
+    }
+    return path.dirname(pathname);
+  }
+  // CJS 兜底（esbuild 打包后 bundle.cjs）
+  return __dirname;
+}
+
+// 获取 __dirname 的兜底逻辑（兼容 pkg 打包）
+function getDirnameForImport(): string {
+  // pkg 打包环境
+  if ((process as any).pkg) {
+    return path.dirname(process.execPath);
+  }
+  // ESM 环境
   try {
-    // @ts-ignore
     if (typeof import.meta === 'object' && import.meta.url && typeof import.meta.url === 'string') {
-      // @ts-ignore
-      const { fileURLToPath } = require('url');
       let pathname = fileURLToPath(import.meta.url);
       if (process.platform === 'win32' && pathname.startsWith('/')) {
         pathname = pathname.substring(1);
@@ -33,10 +49,11 @@ function getDirname(): string {
     // @ts-ignore
     return __dirname;
   }
-  // 最终兜底：当前工作目录
+  // 最终兜底
   return process.cwd();
 }
-const __dirname = getDirname();
+
+const __dirname = getDirnameForImport();
 
 export async function trackRoutes(app: FastifyInstance) {
   const db = getDatabase();

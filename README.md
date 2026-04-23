@@ -1,4 +1,4 @@
-# moonPlayer 🎵
+# moonPlayer
 
 Web 端音乐播放器，支持多种播放模式、评分系统、WebDAV 远程存储和有声书功能。
 
@@ -11,6 +11,8 @@ Web 端音乐播放器，支持多种播放模式、评分系统、WebDAV 远程
 - ✅ 硬件快捷键：支持键盘媒体键和系统控制中心
 - ✅ 删除并播放下一曲
 - ✅ 睡眠定时：一次性定时 / 重复定时
+- ✅ **车机多击控制：** 单击播放/暂停、双击下一曲、三击上一曲（自动检测车机环境）
+- ✅ **车机模式适配：** 播放和暂停共用同一个按钮（切换状态），通过点击容器处理多击逻辑，避免 onPlay/onPause 事件导致死循环
 
 ### 播放列表
 
@@ -282,7 +284,14 @@ pm2 logs moonplayer-server --lines 100
 - `server/src/routes/playlists.ts` - 播放列表管理（含异步扫描）
 - `web/src/stores/playerStore.ts` - 播放器状态
 - `web/src/stores/api.ts` - API 调用封装
-- `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件
+- `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件（含车机多击控制、环境检测）
+
+**车机环境检测:**
+- 自动检测 `navigator.userAgent` 匹配 `car|lixiang|auto|vehicle`
+- UI 顶部显示检测结果（匹配成功/失败 + userAgent 前100字符）
+- 命中车机模式：单击播放、双击下一曲、三击上一曲
+- 命中车机模式时，播放器顶部显示黄色调试信息框
+- **2026-04-23 修复：** 使用点击容器处理多击逻辑，避免 onPlay/onPause 事件导致死循环。播放和暂停共用同一个按钮（切换状态），通过点击容器处理多击逻辑。
 
 **常用命令:**
 ```bash

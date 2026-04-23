@@ -41,6 +41,22 @@ export function PlayerBar() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSleepModal, setShowSleepModal] = useState(false);
   
+  // 🚗 车机环境检测
+  const [carEnvInfo, setCarEnvInfo] = useState({
+    isCarEnv: false,
+    userAgent: ''
+  });
+
+  // 初始化时检测车机环境
+  useEffect(() => {
+    const ua = navigator.userAgent || '';
+    const isCarEnv = /car|lixiang|LiBrowser|auto|vehicle/i.test(ua);
+    setCarEnvInfo({
+      isCarEnv,
+      userAgent: ua
+    });
+  }, []);
+
   // 🚗 车机多击控制适配
   const playTapRef = useRef<number[]>([]);
   const playTimerRef = useRef<any>(null);
@@ -225,23 +241,41 @@ export function PlayerBar() {
 
   // 播放
 const handlePlay = useCallback(() => {
+  const audio = getAudio();
+  
+  // 关键修复：如果音频没有暂停（可能是假暂停或已播放），直接返回，避免抖动
+  if (audio && !audio.paused) return;
+  
   wasPlayingRef.current = true;
   setIsPlaying(true);
   playStartedRef.current = Date.now();
 
-  const audio = getAudio();
+  // 如果音频对象不存在，等待后续流加载
+  if (!audio) return;
 
-  if (audio && getLockedPosition() !== null) {
+  // 如果有待恢复的播放位置，先恢复
+  if (getLockedPosition() !== null) {
     audio.currentTime = getLockedPosition()!;
     clearLockedPosition();
   }
 
-  audio?.play().catch(() => {});
+  // 尝试恢复播放状态（可能因暂停或网络中断）
+  if (audio.paused) {
+    audio.play().catch(() => {
+      // 如果自动播放失败，添加播放事件监听再尝试
+      const onCanPlay = () => {
+        audio.play().catch(() => {});
+        audio.removeEventListener('canplay', onCanPlay);
+        audio.removeEventListener('loadedmetadata', onCanPlay);
+      };
+      audio.addEventListener('canplay', onCanPlay);
+      audio.addEventListener('loadedmetadata', onCanPlay);
+    });
+  }
 
   if ('mediaSession' in navigator) {
     navigator.mediaSession.playbackState = 'playing';
   }
-
 }, [setIsPlaying, getAudio]);
 
   // 暂停
@@ -327,56 +361,92 @@ const handlePause = useCallback(() => {
     }
   }, [currentTrack, playMode, playNext, playPrevious, updateRating, currentPlaylist, getAudio]);
 
+ 
   
-const handlePlayWrapped = useCallback(() => {
-  const isCarEnv = /car|lixiang|auto|vehicle/i.test(navigator.userAgent);
 
-  // 📱 非车机：直接原逻辑
-  if (!isCarEnv) {
-    handlePlay();
+
+  // 顶部 Ref 保持不变
+const isProgrammaticRef = useRef(false);
+
+const handlePlayWrapped = useCallback(() => {
+
+  // 1. 代码触发的系统事件：跳过
+  if (isProgrammaticRef.current) {
+    //console.log("✅ 代码触发，跳过");
+    return;
+  }
+
+  // 2. 非车机跳过
+  if (!carEnvInfo.isCarEnv) {
     return;
   }
 
   const now = Date.now();
 
-  // 只保留1.2秒内点击（更灵敏）
-  playTapRef.current = playTapRef.current.filter(t => now - t <= 1200);
+  // 防抖（保持你原来的写法）
+  if (playTapRef.current.length > 0 && now - playTapRef.current[playTapRef.current.length - 1] < 80) {
+    //console.log('⚡️ 防抖跳过');
+    return;
+  }
+
+  // 记录点击
   playTapRef.current.push(now);
-
   const taps = playTapRef.current.length;
+  //console.log('点击次数:', taps);
 
-  // 清掉“单击播放”的延迟任务
+  // 每次点击都清空上一个定时器（核心！）
   if (playTimerRef.current) {
     clearTimeout(playTimerRef.current);
+    playTimerRef.current = null;
   }
 
+  // ==============================================
+  // 🔥 终极正确逻辑：全部延迟触发，三击自动覆盖双击
+  // ==============================================
+
+  // 单击：延迟清空
   if (taps === 1) {
-    // ✅ 单击：延迟一点执行（防止被双击覆盖）
     playTimerRef.current = setTimeout(() => {
-      handlePlay();
       playTapRef.current = [];
-    }, 300); // 👉 关键：300ms 手感很好
+    }, 1000);
   }
 
+  // 双击：延迟执行！！！不是立刻执行！
   else if (taps === 2) {
-    // ✅ 双击：立即下一曲（不等）
-    playTapRef.current = []; // 重置点击记录
-    handlePreviousOrNext('next');
-    setIsPlaying(true); // 确保播放状态
+    //console.log("⌛ 等待确认是否为双击...");
+    playTimerRef.current = setTimeout(() => {
+      // 延迟到时间后，才真的执行下一曲
+      //console.log("👉 双击 → 下一曲");
+      playTapRef.current = [];
+      
+      isProgrammaticRef.current = true;
+      handlePreviousOrNext('next');
+      setIsPlaying(true);
+      setTimeout(() => {
+        isProgrammaticRef.current = false;
+      }, 100);
+    }, 250); // 250ms 内按第三下，就会取消这个定时器
   }
 
+  // 三击：立即执行，清空所有，优先级最高
   else if (taps >= 3) {
-    // ✅ 三击：立即上一曲（覆盖双击）
-    playTapRef.current = []; // 重置点击记录
+    //console.log("👈 三击 → 上一曲");
+    playTapRef.current = []; // 清空点击
+    
+    isProgrammaticRef.current = true;
     handlePreviousOrNext('prev');
-    setIsPlaying(true); // 确保播放状态
+    setIsPlaying(true);
+    setTimeout(() => {
+      isProgrammaticRef.current = false;
+    }, 100);
   }
 
-}, [handlePlay, handlePreviousOrNext]);
+}, [handlePreviousOrNext, setIsPlaying, carEnvInfo.isCarEnv]);
 
 
-  // 媒体快捷键
-  useEffect(() => {
+
+
+useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
 
@@ -397,39 +467,34 @@ const handlePlayWrapped = useCallback(() => {
       try { fn(); } catch {}
     };
 
-    // ⚠️ 通知栏控制直接调用 handlePlay，不走车机多击检测
+    // 设置所有操作处理器（每次状态变化时重新绑定）
     ms.setActionHandler('play', safe(() => {
       handlePlay();
     }));
-
     ms.setActionHandler('pause', safe(() => {
       handlePause();
     }));
-
-    ms.setActionHandler('previoustrack', safe(() => {
-      handlePreviousOrNext('prev');
-    }));
-
     ms.setActionHandler('nexttrack', safe(() => {
       handlePreviousOrNext('next');
     }));
-
+    ms.setActionHandler('previoustrack', safe(() => {
+      handlePreviousOrNext('prev');
+    }));
     ms.setActionHandler('seekbackward', safe(() => {
       const a = getAudio();
       if (a) a.currentTime -= 10;
     }));
-
     ms.setActionHandler('seekforward', safe(() => {
       const a = getAudio();
       if (a) a.currentTime += 10;
     }));
 
     return () => {
-      ['play', 'pause', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward'].forEach(a => {
+      ['play', 'pause', 'nexttrack', 'previoustrack', 'seekbackward', 'seekforward'].forEach(a => {
         try { ms.setActionHandler(a as any, null); } catch {}
       });
     };
-  }, [currentTrack, isPlaying, handlePlay, handlePause, handlePreviousOrNext, getAudio]);
+  }, [currentTrack, isPlaying]); // 移除函数依赖，避免频繁重新绑定
 
   // 快进快退（支持跨文件跳转）
   const handleSkipForward = useCallback(() => {
@@ -555,6 +620,7 @@ const handlePlayWrapped = useCallback(() => {
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
+      
       {/* 全端统一布局 */}
       <div className="flex flex-col gap-3 w-full">
         {/* 歌名 */}
@@ -651,8 +717,8 @@ const handlePlayWrapped = useCallback(() => {
             showJumpControls={false}
             onClickPrevious={() => handlePreviousOrNext('prev')}
             onClickNext={() => handlePreviousOrNext('next')}
-            onPlay={handlePlayWrapped}
-            onPause={handlePause}
+onPlay={() => handlePlayWrapped()}
+onPause={() => handlePlayWrapped()}
             onEnded={handleEnded}
             onLoadedMetaData={handleLoadedMetadata}
             onCanPlay={handleCanPlay}

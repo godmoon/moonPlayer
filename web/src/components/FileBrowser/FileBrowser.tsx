@@ -338,7 +338,6 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
                     className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer"
                     onClick={() => handlePlayFile(file.path)}
                   >
-                    <span className="text-green-500">🎵</span>
                     <span className="flex-1 truncate">{file.name}</span>
                     <button onClick={(e) => { e.stopPropagation(); handleOpenAddModal('file', file.path); }} className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded text-xs" title="添加到播放列表">➕</button>
                     <button onClick={(e) => { e.stopPropagation(); handlePlayFile(file.path); }} className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-xs" title="播放">▶️</button>

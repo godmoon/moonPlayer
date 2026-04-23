@@ -549,7 +549,6 @@ export function PlaylistDetail({ playlistId, onClose }: {
                   }`}
                 >
                   <span className="text-gray-500 w-6 text-center">{index + 1}</span>
-                  <span className="text-green-500">🎵</span>
                   <div className="flex-1 min-w-0">
                     <div className="truncate">{formatTrackTitle(track)}</div>
                     <div className="text-xs text-gray-500">{track.artist}</div>

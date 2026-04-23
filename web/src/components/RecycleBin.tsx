@@ -88,7 +88,6 @@ export function RecycleBin() {
                 key={track.id}
                 className="flex items-center gap-2 p-2 hover:bg-gray-800 rounded"
               >
-                <span className="text-gray-500">🎵</span>
                 <div className="flex-1 min-w-0">
                   <div className="truncate text-gray-300">{formatTrackTitle(track)}</div>
                   <div className="text-xs text-gray-500 truncate">

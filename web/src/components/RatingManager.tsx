@@ -141,7 +141,6 @@ export function RatingManager() {
                   onChange={() => handleToggleSelect(track.id)}
                   className="w-4 h-4"
                 />
-                <span className="text-green-500">🎵</span>
                 <div className="flex-1 min-w-0">
                   <div className="truncate">{formatTrackTitle(track)}</div>
                   <div className="text-xs text-gray-500 truncate">{track.artist}</div>

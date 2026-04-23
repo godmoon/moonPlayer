@@ -23,7 +23,7 @@ Web 端音乐播放器，支持多种播放模式、评分系统、WebDAV 远程
 ### 前端 (web/)
 - `src/stores/playerStore.ts` - 播放器状态
 - `src/stores/api.ts` - API 调用封装
-- `src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件
+- `src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件（含车机多击控制、环境检测、Media Session 优化）
 - `src/components/FileBrowser/FileBrowser.tsx` - 文件浏览器
 - `src/components/PlaylistManager/PlaylistDetail.tsx` - 播放列表详情（含异步扫描）
 - `src/utils/format.ts` - 格式化工具（含路径处理）
@@ -191,7 +191,19 @@ moonplayer/
 - `server/src/routes/stream.ts` - 音频流传输（含品质转码）
 - `server/src/routes/tracks.ts` - 音轨 API
 - `web/src/stores/playerStore.ts` - 播放器状态
-- `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件
+- `web/src/components/AudioPlayer/PlayerBar.tsx` - 播放器组件（含车机多击控制、环境检测、Media Session 优化）
+
+**车机环境检测:**
+- 自动检测 `navigator.userAgent` 匹配 `car|lixiang|auto|vehicle`
+- UI 顶部显示检测结果（匹配成功/失败 + userAgent 前100字符）
+- 命中车机模式：单击播放、双击下一曲、三击上一曲
+- 命中车机模式时，播放器顶部显示黄色调试信息框（点击复制完整 userAgent）
+- **2026-04-23 修复：** 播放和暂停共用同一个按钮（切换状态），通过点击容器处理多击逻辑，避免 onPlay/onPause 事件导致死循环。点击容器（`.click-handler`）拦截点击，避免与 `react-h5-audio-player` 的 `onPlay` 事件冲突。车机模式下，播放和暂停是同一个按钮（切换状态），需要连着暂停也一起处理计算，因为播放和暂停是同一个按钮。
+- 车机模式下，播放和暂停是同一个按钮（切换状态），需要连着暂停也一起处理计算，因为播放和暂停是同一个按钮。
+
+**Media Session 优化:**
+- 播放按钮按下时先检查音频是否真的暂停（`audio.paused === true`）
+- 避免假暂停导致播放/暂停反复抖动（暂停很久后常见于 Android 客户端）
 
 **常用命令:**
 ```bash

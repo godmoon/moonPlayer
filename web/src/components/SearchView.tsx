@@ -370,7 +370,6 @@ export function SearchView() {
                 className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer"
                 onClick={() => handlePlayFile(track)}
               >
-                <span className="text-green-500">🎵</span>
                 <div className="flex-1 min-w-0">
                   <div className="truncate text-sm">
                     {highlightMatch(track.title || getFileName(track.path), query)}
