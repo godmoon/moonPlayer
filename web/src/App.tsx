@@ -137,10 +137,13 @@ function App() {
       {/* 主内容区 */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* 侧边栏 */}
-        <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
+        <Sidebar activeTab={activeTab} onTabChange={(tab) => {
+          setActiveTab(tab);
+          setContentView('main');
+        }} />
 
         {/* 内容区 */}
-        <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain">
+        <div className="flex-1 overflow-hidden overflow-y-auto overscroll-contain px-2 pt-2 md:px-0 md:pt-0">
           {contentView === 'recycleBin' ? (
             <RecycleBin />
           ) : activeTab === 'browse' ? (

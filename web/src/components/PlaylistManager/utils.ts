@@ -19,8 +19,7 @@ export const PLAY_MODES = [
   { value: 'sequential', label: '顺序播放' },
   { value: 'shuffle', label: '随机播放' },
   { value: 'weighted', label: '权重随机' },
-  { value: 'random', label: '乱序播放' },
-  { value: 'single-loop', label: '单曲循环' }
+  { value: 'random', label: '乱序播放' }
 ];
 
 // 匹配字段选项

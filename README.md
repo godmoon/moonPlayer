@@ -72,10 +72,9 @@ Web 端音乐播放器，支持多种播放模式、评分系统、WebDAV 远程
 
 ## 技术栈
 
-**后端：** Node.js + Fastify + SQLite (better-sqlite3 / sql.js WASM)
-**前端：** React + Vite + Tailwind CSS + Zustand
-**音频：** HTML5 Audio API + Media Session API
-
+- **后端**: Node.js + Fastify + SQLite (sql.js WASM)
+- **前端**: React + Vite + Tailwind CSS + Zustand
+- **音频**: HTML5 Audio API + Media Session API
 ## 项目结构
 
 ```
@@ -311,6 +310,6 @@ pm2 restart moonplayer-server  # 重启服务
 - 可选 `immediate=true` 使用同步扫描（旧模式）
 - 扫描进度通过轮询 `/api/scan/tasks/:taskId` 获取
 
-## License
+## 品质模式
 
-MIT
+low(120k) | medium(192k) | high(320k) | lossless

@@ -36,6 +36,7 @@ export interface Playlist {
   createdAt: number;
   updatedAt: number;
   isAuto: boolean;           // 是否自动创建
+  qualityMode?: string;      // 品质设置（可选，未设置则使用全局配置）
 }
 
 export interface PlaylistWithItems extends Playlist {

@@ -54,7 +54,7 @@ export async function createPlaylist(name: string, items: any[] = [], isAuto = f
   return res.data;
 }
 
-export async function updatePlaylist(id: number, data: { name?: string; items?: any[]; playMode?: string; skipIntro?: number; skipOutro?: number }): Promise<void> {
+export async function updatePlaylist(id: number, data: { name?: string; items?: any[]; playMode?: string; skipIntro?: number; skipOutro?: number; qualityMode?: string }): Promise<void> {
   await api.put(`/playlists/${id}`, data);
 }
 
@@ -245,6 +245,16 @@ export async function getDuration(trackId: number): Promise<number | null> {
   try {
     const res = await api.get(`/duration/${trackId}`);
     return res.data.duration;
+  } catch {
+    return null;
+  }
+}
+
+export async function getStreamBitrate(trackId: number, qualityMode?: string): Promise<{ bitrate: number | null; sourceBitrate: number | null; needsTranscode: boolean } | null> {
+  try {
+    const params = qualityMode ? `?quality=${qualityMode}` : '';
+    const res = await api.get(`/stream-bitrate/${trackId}${params}`);
+    return res.data;
   } catch {
     return null;
   }

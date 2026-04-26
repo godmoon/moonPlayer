@@ -394,7 +394,7 @@ export async function playlistRoutes(app: FastifyInstance) {
   // 更新播放列表
   app.put('/api/playlists/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { name, items, playMode, skipIntro, skipOutro } = req.body as {
+    const { name, items, playMode, skipIntro, skipOutro, qualityMode } = req.body as {
       name?: string;
       items?: Array<{
         type: 'directory' | 'file' | 'filter';
@@ -408,6 +408,7 @@ export async function playlistRoutes(app: FastifyInstance) {
       playMode?: string;
       skipIntro?: number;
       skipOutro?: number;
+      qualityMode?: string;
     };
 
     const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(Number(id));
@@ -418,7 +419,7 @@ export async function playlistRoutes(app: FastifyInstance) {
     const now = Date.now();
 
     // 更新基本信息
-    if (name !== undefined || playMode !== undefined || skipIntro !== undefined || skipOutro !== undefined) {
+    if (name !== undefined || playMode !== undefined || skipIntro !== undefined || skipOutro !== undefined || qualityMode !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
 
@@ -437,6 +438,11 @@ export async function playlistRoutes(app: FastifyInstance) {
       if (skipOutro !== undefined) {
         updates.push('skip_outro = ?');
         values.push(skipOutro);
+      }
+      if (qualityMode !== undefined) {
+        updates.push('quality_mode = ?');
+        // 空字符串表示使用全局配置，存为 null
+        values.push(qualityMode === '' ? null : qualityMode);
       }
 
       updates.push('updated_at = ?');

@@ -263,7 +263,8 @@ export function UnifiedPlaylist({ onSelectPlaylist }: {
         isAuto: result.playlist.is_auto === 1,
         playMode: result.playlist.play_mode,
         skipIntro: result.playlist.skip_intro,
-        skipOutro: result.playlist.skip_outro
+        skipOutro: result.playlist.skip_outro,
+        qualityMode: result.playlist.quality_mode
       };
       setCurrentPlaylist(pl, trackList);
 

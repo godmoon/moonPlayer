@@ -4,10 +4,12 @@ import AudioPlayer from 'react-h5-audio-player';
 import 'react-h5-audio-player/lib/styles.css';
 import { usePlayerStore, type QualityMode } from '../../stores/playerStore';
 import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory } from '../../stores/api';
-import { getDuration } from '../../stores/api';
+import { getDuration, getStreamBitrate } from '../../stores/api';
 import { AddToPlaylistModal } from '../AddToPlaylistModal';
 import { SleepTimerModal } from './SleepTimerModal';
+import { TrackInfoModal } from './TrackInfoModal';
 import { PLAY_MODES, PLAY_MODE_LABELS, SKIP_AMOUNTS, setPendingSeekPosition, consumePendingSeekPosition, getLockedPosition, clearLockedPosition, formatTrackTitle } from './utils';
+import { registerAudioElementFn } from '../../utils/nativeBridge';
 import type { PlayMode } from './utils';
 
 // 导出设置待恢复位置的函数
@@ -40,6 +42,11 @@ export function PlayerBar() {
   const [skipAmounts, setSkipAmounts] = useState({ forward: 5, backward: 5 });
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSleepModal, setShowSleepModal] = useState(false);
+  const [showTrackInfoModal, setShowTrackInfoModal] = useState(false);
+  const [streamBitrate, setStreamBitrate] = useState<number | null>(null);
+  const [sourceBitrate, setSourceBitrate] = useState<number | null>(null);
+  const [needsTranscode, setNeedsTranscode] = useState(false);
+  const [isSingleLoop, setIsSingleLoop] = useState(false);
   
   // 🚗 车机环境检测
   const [carEnvInfo, setCarEnvInfo] = useState({
@@ -57,24 +64,81 @@ export function PlayerBar() {
     });
   }, []);
 
+
   // 🚗 车机多击控制适配
   const playTapRef = useRef<number[]>([]);
   const playTimerRef = useRef<any>(null);
 
-  const getAudio = useCallback(() => {
+const getAudio = useCallback(() => {
     return playerRef.current?.audio?.current;
   }, []);
 
+  // 有效品质设置（优先使用播放列表配置，否则使用全局配置）
+  const effectiveQualityMode = (currentPlaylist?.qualityMode as QualityMode) || qualityMode;
 
+  // 注册音频元素获取函数到 nativeBridge（必须在 getAudio 定义后）
+  useEffect(() => {
+    registerAudioElementFn(getAudio);
+  }, [getAudio]);
 
-  // 更新页面标题为当前播放歌曲
+ // 📱 页面可见性状态（用于修复后台唤醒后通知栏控制失效）
+ const pageWasHiddenRef = useRef<boolean>(false);
+ // 页面可见性变化处理：修复后台唤醒后通知栏控制失效
+ useEffect(() => {
+   if (typeof document === 'undefined') return;
+   const handleVisibilityChange = () => {
+     const isVisible = document.visibilityState === 'visible';
+     const audio = getAudio();
+     if (isVisible && pageWasHiddenRef.current) {
+       // 页面从后台恢复
+       if (audio && currentTrack) {
+         const realIsPlaying = !audio.paused && !audio.ended;
+         const storeState = usePlayerStore.getState();
+         if (realIsPlaying !== storeState.isPlaying) {
+           console.log('[PlayerBar] 可见性恢复：同步播放状态', { realIsPlaying, storeIsPlaying: storeState.isPlaying });
+           storeState.setIsPlaying(realIsPlaying);
+         }
+         if ('mediaSession' in navigator) {
+           navigator.mediaSession.playbackState = realIsPlaying ? 'playing' : 'paused';
+         }
+         if (storeState.isPlaying && !realIsPlaying) {
+           audio.play().catch((e: any) => console.log('[PlayerBar] 恢复播放失败:', e.message));
+         }
+       }
+       pageWasHiddenRef.current = false;
+     } else if (!isVisible) {
+       pageWasHiddenRef.current = true;
+     }
+   };
+   document.addEventListener('visibilitychange', handleVisibilityChange);
+   return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+ }, [currentTrack, getAudio]);
+
+ // 更新页面标题为当前播放歌曲
   useEffect(() => {
     if (currentTrack) {
-      document.title = `${formatTrackTitle(currentTrack)} - MoonPlayer`;
+      document.title = `${formatTrackTitle(currentTrack, effectiveQualityMode, needsTranscode)} - MoonPlayer`;
     } else {
       document.title = 'MoonPlayer';
     }
-  }, [currentTrack]);
+  }, [currentTrack, effectiveQualityMode]);
+
+  // 获取实际音频流比特率
+  useEffect(() => {
+    if (!currentTrack) {
+      setStreamBitrate(null);
+      setSourceBitrate(null);
+      setNeedsTranscode(false);
+      return;
+    }
+    getStreamBitrate(currentTrack.id, effectiveQualityMode).then(result => {
+      if (result) {
+        setStreamBitrate(result.bitrate);
+        setSourceBitrate(result.sourceBitrate);
+        setNeedsTranscode(result.needsTranscode);
+      }
+    });
+  }, [currentTrack, effectiveQualityMode]);
 
   // 更新音量
   useEffect(() => {
@@ -102,17 +166,17 @@ export function PlayerBar() {
         const match = currentTrack.path.match(/^webdav:\/\/(\d+)(.+)$/);
         if (match) {
           const baseUrl = `/api/webdav/${match[1]}/stream?path=${encodeURIComponent(match[2])}`;
-          return qualityMode !== 'lossless' ? `${baseUrl}&quality=${qualityMode}` : baseUrl;
+          return effectiveQualityMode !== 'lossless' ? `${baseUrl}&quality=${effectiveQualityMode}` : baseUrl;
         }
         return null;
-      })() : getStreamUrl(currentTrack.id, qualityMode)) 
+      })() : getStreamUrl(currentTrack.id, effectiveQualityMode)) 
     : null;
 
   // 品质切换时保存并恢复播放位置
   // 持续跟踪当前播放位置
   const currentPositionRef = useRef<number>(0);
   const wasPlayingRef = useRef<boolean>(false);
-  const lastQualityRef = useRef<QualityMode>(qualityMode);
+  const lastQualityRef = useRef<QualityMode>(effectiveQualityMode);
   const savedPositionRef = useRef<{ trackId: number; position: number; wasPlaying: boolean } | null>(null);
 
   // 使用 timeupdate 持续跟踪位置
@@ -128,10 +192,10 @@ export function PlayerBar() {
     return () => audio.removeEventListener('timeupdate', updateTime);
   }, [getAudio, streamUrl]); // 添加 streamUrl 依赖，每次 src 变化时重新绑定
 
-  // 当 qualityMode 变化时，保存当前位置
+  // 当 effectiveQualityMode 变化时，保存当前位置
   useLayoutEffect(() => {
     // 检测品质是否发生变化
-    if (lastQualityRef.current !== qualityMode && currentTrack) {
+    if (lastQualityRef.current !== effectiveQualityMode && currentTrack) {
       // 使用 ref 中保存的位置
       savedPositionRef.current = {
         trackId: currentTrack.id,
@@ -139,8 +203,8 @@ export function PlayerBar() {
         wasPlaying: wasPlayingRef.current
       };
     }
-    lastQualityRef.current = qualityMode;
-  }, [qualityMode, currentTrack, getAudio]);
+    lastQualityRef.current = effectiveQualityMode;
+  }, [effectiveQualityMode, currentTrack, getAudio]);
 
   // 当 streamUrl 变化后，恢复播放位置
   useEffect(() => {
@@ -292,16 +356,20 @@ const handlePause = useCallback(() => {
 
 }, [setIsPlaying, getAudio]);
 
-  // 播放结束
+// 播放结束
   const handleEnded = useCallback(async () => {
+    if (isSingleLoop) {
+      const audio = getAudio();
+      if (audio) { audio.currentTime = 0; audio.play(); }
+      return;
+    }
     if (currentTrack) {
       await recordPlay(currentTrack.id, true, 0);
       await updateRating(currentTrack.id, 1);
     }
     playNext();
-    // 切换曲目后设置播放状态，useEffect 会触发 audio.play()
     setIsPlaying(true);
-  }, [currentTrack, playNext, updateRating, setIsPlaying]);
+  }, [currentTrack, isSingleLoop, playNext, updateRating, setIsPlaying, getAudio]);
 
   // 元数据加载
   const handleLoadedMetadata = useCallback((e: any) => {
@@ -343,8 +411,9 @@ const handlePause = useCallback(() => {
     const audio = getAudio();
     if (!currentTrack) { direction === 'next' ? playNext() : playPrevious(); return; }
 
-    if (playMode === 'single-loop' && audio) {
-      audio.currentTime = 0; audio.play(); return;
+    if (isSingleLoop) {
+      if (audio) { audio.currentTime = 0; audio.play(); }
+      return;
     }
 
     if (direction === 'next') {
@@ -359,7 +428,7 @@ const handlePause = useCallback(() => {
     } else {
       playPrevious();
     }
-  }, [currentTrack, playMode, playNext, playPrevious, updateRating, currentPlaylist, getAudio]);
+  }, [currentTrack, isSingleLoop, playMode, playNext, playPrevious, updateRating, currentPlaylist, getAudio]);
 
  
   
@@ -494,7 +563,7 @@ useEffect(() => {
         try { ms.setActionHandler(a as any, null); } catch {}
       });
     };
-  }, [currentTrack, isPlaying]); // 移除函数依赖，避免频繁重新绑定
+  }, [currentTrack, isPlaying, handlePlay, handlePause, handlePreviousOrNext, getAudio]); // 确保关键依赖变化时重新绑定
 
   // 快进快退（支持跨文件跳转）
   const handleSkipForward = useCallback(() => {
@@ -623,45 +692,27 @@ useEffect(() => {
       
       {/* 全端统一布局 */}
       <div className="flex flex-col gap-3 w-full">
-        {/* 歌名 */}
-        <div className="text-white font-medium text-base truncate">
-          {currentTrack && formatTrackTitle(currentTrack, qualityMode)}
-        </div>
-
-        {/* 按钮栏 - 两行布局 */}
-        <div className="flex flex-col gap-2 w-full">
-          {/* 第一行：评分 */}
-          <div className="flex items-center gap-1">
-            <span className="text-gray-300 text-sm">评分: {currentTrack.rating}</span>
-            <button onClick={() => updateRating(currentTrack.id, 1)} className="text-green-400">👍</button>
-            <button onClick={() => updateRating(currentTrack.id, -1)} className="text-red-400">👎</button>
-            <button onClick={handleSkipBackward} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">⏪{skipAmounts.backward}s</button>
-            <button onClick={handleSkipForward} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">{skipAmounts.forward}s⏩</button>
+        {/* 歌名和快捷信息 */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-white font-medium text-base truncate flex-1 min-w-0">
+            {currentTrack && formatTrackTitle(currentTrack, effectiveQualityMode, needsTranscode)}
           </div>
-
-          {/* 第二行：功能按钮 */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <button onClick={handleAddToFavorites} className="px-2 py-1 bg-purple-700 hover:bg-purple-600 rounded text-sm">❤️</button>
-            <button onClick={handleDeleteAndNext} className="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-sm">🗑️</button>
-            
-            <button onClick={handleTogglePlayMode} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm" title={playModeLabel}>
-              {playModeIcon} {playModeLabel.slice(0, 2)}
-            </button>
-
-            <button 
-              onClick={() => setShowSleepModal(true)} 
-              className={`px-2 py-1 rounded text-sm ${sleepTimer.mode !== 'off' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600'}`}
-              title={sleepTimer.mode === 'once' ? `一次性定时 ${sleepTimer.minutes} 分钟` : sleepTimer.mode === 'repeat' ? `重复定时 ${sleepTimer.minutes} 分钟` : '睡眠定时'}
-            >
-              {sleepTimerDisplay || '💤'}
-            </button>
+          <div className="flex items-center gap-1 text-xs text-gray-400 flex-shrink-0">
+            <span>{currentTrack?.rating ? `${currentTrack.rating > 0 ? '+' : ''}${currentTrack.rating}` : ''}</span>
+            <span>{streamBitrate ? `${streamBitrate}k` : ''}</span>
+            <button
+              onClick={() => setShowTrackInfoModal(true)}
+              className="player-custom-btn text-gray-400 hover:text-white"
+              title="歌曲详情"
+            >ℹ️</button>
           </div>
         </div>
+
+        
 
         {/* 播放器 */}
         <div className="w-full flex flex-col gap-3 px-1 mt-1">
           <style>{`
-            .rhap_loop-button { display: none !important; }
             .rhap_main {
               flex-direction: column !important;
               gap: 12px !important;
@@ -692,8 +743,11 @@ useEffect(() => {
             }
             .rhap_progress-loaded {
               height: 16px !important;
-              background: #666 !important;
+              background: transparent !important;
               border-radius: 0 !important;
+            }
+            .rhap_download-progress {
+              display: none !important;
             }
             .rhap_progress-filled {
               height: 16px !important;
@@ -708,17 +762,123 @@ useEffect(() => {
               color: #ccc !important;
               min-width: 45px !important;
             }
+            .rhap_button {
+              width: 4.5vmin !important;
+              height: 4.5vmin !important;
+              max-width: 32px !important;
+              max-height: 32px !important;
+              min-width: 24px !important;
+              min-height: 24px !important;
+            }
+            .rhap_button svg {
+              width: 3vmin !important;
+              height: 3vmin !important;
+              max-width: 22px !important;
+              max-height: 22px !important;
+              min-width: 16px !important;
+              min-height: 16px !important;
+            }
+            .rhap_main-controls-button {
+              width: 6vmin !important;
+              height: 6vmin !important;
+              max-width: 44px !important;
+              max-height: 44px !important;
+              min-width: 32px !important;
+              min-height: 32px !important;
+            }
+            .rhap_main-controls-button svg {
+              width: 4.5vmin !important;
+              height: 4.5vmin !important;
+              max-width: 32px !important;
+              max-height: 32px !important;
+              min-width: 24px !important;
+              min-height: 24px !important;
+            }
+            .player-custom-btn {
+              background: none !important;
+              border: none !important;
+              cursor: pointer !important;
+              font-size: clamp(16px, 3.5vmin, 30px) !important;
+              line-height: 1 !important;
+              padding: 2px !important;
+            }
+            .player-loop-btn svg {
+              width: clamp(16px, 3.5vmin, 30px) !important;
+              height: clamp(16px, 3.5vmin, 30px) !important;
+            }
           `}</style>
           
           <AudioPlayer
             ref={playerRef}
+            loop={isSingleLoop}
             src={streamUrl || undefined}
             showSkipControls
             showJumpControls={false}
+            customAdditionalControls={[
+              <button
+                key="loop"
+                onClick={() => setIsSingleLoop(prev => !prev)}
+                className="player-custom-btn player-loop-btn"
+                title={isSingleLoop ? 'Single loop on' : 'Single loop off'}
+              >
+                <svg viewBox="0 0 24 24" fill={isSingleLoop ? '#22c55e' : '#ef4444'}>
+                  <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.83l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.83L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+                </svg>
+              </button>,
+              <button
+                key="rating-up"
+                onClick={() => updateRating(currentTrack.id, 1)}
+                className="player-custom-btn text-green-400 hover:text-green-300"
+                title="Like"
+              >👍</button>,
+              <button
+                key="rating-down"
+                onClick={() => updateRating(currentTrack.id, -1)}
+                className="player-custom-btn text-red-400 hover:text-red-300"
+                title="Dislike"
+              >👎</button>,
+              <button
+                key="skip-back"
+                onClick={handleSkipBackward}
+                className="player-custom-btn text-gray-300 hover:text-white"
+                title={`Rewind ${skipAmounts.backward}s`}
+              >⏪</button>,
+              <button
+                key="skip-forward"
+                onClick={handleSkipForward}
+                className="player-custom-btn text-gray-300 hover:text-white"
+                title={`Forward ${skipAmounts.forward}s`}
+              >⏩</button>,
+              <button
+                key="favorites"
+                onClick={handleAddToFavorites}
+                className="player-custom-btn text-purple-400 hover:text-purple-300"
+                title="Add to playlist"
+              >❤️</button>,
+              <button
+                key="delete"
+                onClick={handleDeleteAndNext}
+                className="player-custom-btn text-red-400 hover:text-red-300"
+                title="Delete and play next"
+              >🗑️</button>,
+              <button
+                key="play-mode"
+                onClick={handleTogglePlayMode}
+                className="player-custom-btn text-gray-300 hover:text-white"
+                title={playModeLabel}
+              >{playModeIcon}</button>,
+              <button
+                key="sleep"
+                onClick={() => setShowSleepModal(true)}
+                className={`player-custom-btn ${sleepTimer.mode !== 'off' ? 'text-blue-400' : 'text-gray-400 hover:text-white'}`}
+                title={sleepTimer.mode === 'once' ? `Timer ${sleepTimer.minutes}m` : sleepTimer.mode === 'repeat' ? `Repeat ${sleepTimer.minutes}m` : 'Sleep timer'}
+              >{sleepTimerDisplay || '💤'}</button>,
+            ]}
+            customVolumeControls={[]}
             onClickPrevious={() => handlePreviousOrNext('prev')}
             onClickNext={() => handlePreviousOrNext('next')}
-onPlay={() => handlePlayWrapped()}
-onPause={() => handlePlayWrapped()}
+            onPlay={() => handlePlayWrapped()}
+            onPause={() => handlePlayWrapped()}
             onEnded={handleEnded}
             onLoadedMetaData={handleLoadedMetadata}
             onCanPlay={handleCanPlay}
@@ -734,6 +894,10 @@ onPause={() => handlePlayWrapped()}
 
       {showSleepModal && (
         <SleepTimerModal onClose={() => setShowSleepModal(false)} />
+      )}
+
+      {showTrackInfoModal && (
+        <TrackInfoModal onClose={() => setShowTrackInfoModal(false)} streamBitrate={streamBitrate} sourceBitrate={sourceBitrate} needsTranscode={needsTranscode} />
       )}
 
       {/* 删除失败弹窗 */}

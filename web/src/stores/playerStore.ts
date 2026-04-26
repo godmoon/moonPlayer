@@ -11,13 +11,15 @@ interface SleepTimerState {
   remainingMinutes: number; // 剩余分钟数（用于显示）
 }
 
-type PlayMode = 'sequential' | 'shuffle' | 'weighted' | 'random' | 'single-loop';
+type PlayMode = 'sequential' | 'shuffle' | 'weighted' | 'random';
 
 // 省流模式（比特率限制）
-export type QualityMode = 'low' | 'medium' | 'high' | 'lossless';
+export type QualityMode = 'ultra_low' | 'very_low' | 'low' | 'medium' | 'high' | 'lossless';
 
 export const QUALITY_MODES: { id: QualityMode; label: string; bitrate: number; description: string }[] = [
-  { id: 'low', label: '低品质', bitrate: 120, description: '120kbps，省流量' },
+  { id: 'ultra_low', label: '极低', bitrate: 32, description: '32kbps，极省流量' },
+  { id: 'very_low', label: '超低', bitrate: 64, description: '64kbps，超省流量' },
+  { id: 'low', label: '低品质', bitrate: 128, description: '128kbps，省流量' },
   { id: 'medium', label: '中品质', bitrate: 192, description: '192kbps，平衡' },
   { id: 'high', label: '高品质', bitrate: 320, description: '320kbps，高音质' },
   { id: 'lossless', label: '无损', bitrate: 0, description: '原始音质' }
@@ -46,6 +48,7 @@ interface Playlist {
   playMode?: string;
   skipIntro?: number;
   skipOutro?: number;
+  qualityMode?: string;
 }
 
 interface PlayerState {
@@ -115,7 +118,7 @@ interface PlayerState {
 function getInitialQualityMode(): QualityMode {
   try {
     const saved = localStorage.getItem('qualityMode');
-    if (saved && ['low', 'medium', 'high', 'lossless'].includes(saved)) {
+    if (saved && ['ultra_low', 'very_low', 'low', 'medium', 'high', 'lossless'].includes(saved)) {
       return saved as QualityMode;
     }
   } catch {}
@@ -159,13 +162,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   // ... 下面所有你的原有代码 完全不动
   setCurrentTrack: (track) => set({ currentTrack: track }),
 
-  setCurrentPlaylist: (playlist, tracks) => set({
-    currentPlaylist: playlist,
-    playlistTracks: tracks,
-    shuffleQueue: generateShuffleQueue(tracks.length),
-    shuffleIndex: 0,
-    // 如果播放列表有默认播放模式，切换过去
-    playMode: (playlist?.playMode as PlayMode) || get().playMode
+  setCurrentPlaylist: (playlist, tracks) => set((state) => {
+    // 播放列表配置优先于全局，不修改全局品质设置
+    return {
+      currentPlaylist: playlist,
+      playlistTracks: tracks,
+      shuffleQueue: generateShuffleQueue(tracks.length),
+      shuffleIndex: 0,
+      playMode: (playlist?.playMode as PlayMode) || state.playMode
+    };
   }),
 
   setIsPlaying: (isPlaying) => set({ isPlaying }),
@@ -305,10 +310,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           set({ shuffleQueue: newQueue, shuffleIndex: 0 });
           nextIndex = newQueue[0];
         }
-        break;
-
-      case 'single-loop':
-        nextIndex = currentIndex >= 0 ? currentIndex : 0;
         break;
     }
 

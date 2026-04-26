@@ -20,7 +20,9 @@ import {
 
 // 品质模式对应的比特率
 const QUALITY_BITRATES: Record<string, number> = {
-  low: 120,
+  ultra_low: 32,
+  very_low: 64,
+  low: 128,
   medium: 192,
   high: 320,
   lossless: 0
@@ -28,6 +30,8 @@ const QUALITY_BITRATES: Record<string, number> = {
 
 // 品质模式对应的标签
 const QUALITY_LABELS: Record<string, string> = {
+  ultra_low: '极低',
+  very_low: '超低',
   low: '低品质',
   medium: '中品质',
   high: '高品质',
@@ -205,6 +209,99 @@ export async function streamRoutes(app: FastifyInstance) {
     } catch (err) {
       return reply.code(500).send({ error: `获取时长失败: ${(err as Error).message}` });
     }
+  });
+
+  // 获取实际音频流比特率（考虑转码设置）
+  app.get('/api/stream-bitrate/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { quality } = req.query as { quality?: string };
+
+    const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id));
+    if (!track) {
+      return reply.code(404).send({ error: '音轨不存在' });
+    }
+
+    const filePath = (track as any).path;
+    const qualityMode = quality || 'high';
+
+    // 从设置中获取品质配置
+    const QUALITY_BITRATES: Record<string, number> = {
+      ultra_low: 32,
+      very_low: 64,
+      low: 128,
+      medium: 192,
+      high: 320,
+      lossless: 0
+    };
+    const targetBitrate = QUALITY_BITRATES[qualityMode] || 0;
+
+    // 无损模式，获取原始文件实际比特率
+    if (qualityMode === 'lossless' || targetBitrate === 0) {
+      let actualBitrate = 0;
+      if (filePath.startsWith('webdav://')) {
+        const match = filePath.match(/^webdav:\/\/(\d+)(.+)$/);
+        if (match) {
+          const configId = parseInt(match[1], 10);
+          const webdavPath = match[2];
+          const cachePath = getWebdavCachePath(configId, webdavPath);
+          if (cachePath && fs.existsSync(cachePath)) {
+            actualBitrate = await getAudioBitrate(cachePath);
+            return { bitrate: actualBitrate, sourceBitrate: actualBitrate, needsTranscode: false };
+          }
+        }
+      } else {
+        // 本地文件
+        if (fs.existsSync(filePath)) {
+          actualBitrate = await getAudioBitrate(filePath);
+          return { bitrate: actualBitrate, sourceBitrate: actualBitrate, needsTranscode: false };
+        }
+      }
+      return { bitrate: null, sourceBitrate: null, needsTranscode: false };
+    }
+
+    // 非无损模式，需要检查原始文件比特率和目标比特率
+    let sourceBitrate = 0;
+    if (filePath.startsWith('webdav://')) {
+      const match = filePath.match(/^webdav:\/\/(\d+)(.+)$/);
+      if (match) {
+        const configId = parseInt(match[1], 10);
+        const webdavPath = match[2];
+        // 先尝试从缓存获取
+        const cachePath = getWebdavCachePath(configId, webdavPath);
+        if (cachePath && fs.existsSync(cachePath)) {
+          sourceBitrate = await getAudioBitrate(cachePath);
+        }
+        // 如果缓存不存在或获取失败，下载到临时文件获取原始比特率
+        if (sourceBitrate === 0) {
+          try {
+            const config = getWebdavConfig(configId);
+            if (config) {
+              const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
+              const tempPath = path.join(os.tmpdir(), `moonplayer_temp_${Date.now()}.mp3`);
+              await client.downloadFile(webdavPath, tempPath);
+              if (fs.existsSync(tempPath)) {
+                sourceBitrate = await getAudioBitrate(tempPath);
+                fs.unlinkSync(tempPath);
+              }
+            }
+          } catch (e) {
+            console.error('获取WebDAV文件比特率失败:', e);
+          }
+        }
+      }
+    } else {
+      if (fs.existsSync(filePath)) {
+        sourceBitrate = await getAudioBitrate(filePath);
+      }
+    }
+
+    // 如果原始比特率高于目标比特率，返回转码后的比特率
+    if (sourceBitrate > targetBitrate) {
+      return { bitrate: targetBitrate, sourceBitrate, needsTranscode: true };
+    }
+
+    // 否则返回原始比特率（如果获取不到返回null）
+    return { bitrate: sourceBitrate || null, sourceBitrate: sourceBitrate || null, needsTranscode: false };
   });
 
   // 通过路径直接流式传输（用于未扫描的文件）

@@ -5,6 +5,7 @@ import { usePlayerStore } from '../../stores/playerStore';
 import type { Track, Playlist } from '../../stores/playerStore';
 import { AddSourceModal } from './AddSourceModal';
 import { PLAY_MODES, TRACK_SORT_OPTIONS, MATCH_FIELDS, MATCH_OP_LABELS, formatDuration } from './utils';
+import { QUALITY_MODES } from '../../stores/playerStore';
 import { formatTrackTitle } from '../../utils/format';
 import { setPendingSeekPosition } from '../AudioPlayer/PlayerBar';
 
@@ -22,6 +23,7 @@ export function PlaylistDetail({ playlistId, onClose }: {
   const [editPlayMode, setEditPlayMode] = useState('sequential');
   const [editSkipIntro, setEditSkipIntro] = useState(0);
   const [editSkipOutro, setEditSkipOutro] = useState(0);
+  const [editQualityMode, setEditQualityMode] = useState('');
   const [saving, setSaving] = useState(false);
   // 从初始化历史获取的播放位置（用于显示非当前播放列表的信息）
   const [initialLastTrackId, setInitialLastTrackId] = useState<number | null>(null);
@@ -32,6 +34,13 @@ export function PlaylistDetail({ playlistId, onClose }: {
   const [trackSort, setTrackSort] = useState<string>('name');
   const { currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying } = usePlayerStore();
   const lastPlayedRef = useRef<HTMLDivElement>(null);
+
+
+// ✅ 新增：滚动容器 ref
+const listContainerRef = useRef<HTMLDivElement>(null);
+
+// ✅ 新增：记录上一次高亮，避免重复滚动
+const prevHighlightRef = useRef<number | null | undefined>(null);
 
   const loadPlaylist = useCallback(async (autoPlay = false, signal?: AbortSignal) => {
     setLoading(true);
@@ -91,7 +100,8 @@ export function PlaylistDetail({ playlistId, onClose }: {
             isAuto: result.is_auto === 1,
             playMode: result.play_mode,
             skipIntro: result.skip_intro,
-            skipOutro: result.skip_outro
+            skipOutro: result.skip_outro,
+            qualityMode: result.quality_mode
           };
           setCurrentPlaylist(pl, tracksResult.tracks);
 
@@ -120,26 +130,29 @@ export function PlaylistDetail({ playlistId, onClose }: {
     } finally {
       setLoading(false);
     }
-  }, [playlistId, currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying]);
+  }, [playlistId]); // ✅ 不再依赖 currentTrack 等
 
-  useEffect(() => {
-    const controller = new AbortController();
-    loadPlaylist(true, controller.signal); // 首次加载时自动播放
-    return () => controller.abort();
-  }, [loadPlaylist]);
+useEffect(() => {
+  const controller = new AbortController();
+
+  // ✅ 只在 playlistId 变化时加载
+  loadPlaylist(true, controller.signal);
+
+  return () => controller.abort();
+}, [playlistId]); // ✅ 关键：只依赖 playlistId
 
   // 计算需要高亮和滚动的曲目 ID
   // 当前播放列表用 currentTrack，非当前播放列表用历史记录
   const highlightTrackId = currentPlaylist?.id === playlistId 
     ? currentTrack?.id 
     : initialLastTrackId;
-
-  // 滚动到高亮的音轨
-  useEffect(() => {
-    if (lastPlayedRef.current && highlightTrackId) {
-      lastPlayedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [highlightTrackId, loading]);
+// 当 currentTrack 变化时，滚动到视图中心（使用 scrollIntoView 确保跨平台一致性）
+useEffect(() => {
+  if (currentPlaylist?.id === playlistId && currentTrack?.id && lastPlayedRef.current) {
+    // 使用原生 scrollIntoView 确保移动端兼容性更好
+    lastPlayedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}, [currentPlaylist?.id, currentTrack?.id, playlistId]);
 
   // 打开设置时初始化表单
   useEffect(() => {
@@ -148,6 +161,7 @@ export function PlaylistDetail({ playlistId, onClose }: {
       setEditPlayMode(playlist.play_mode || 'sequential');
       setEditSkipIntro(playlist.skip_intro || 0);
       setEditSkipOutro(playlist.skip_outro || 0);
+      setEditQualityMode(playlist.quality_mode || '');
     }
   }, [showSettings, playlist]);
 
@@ -179,11 +193,34 @@ export function PlaylistDetail({ playlistId, onClose }: {
     return sorted;
   }, [tracks, trackSort]);
 
+  // 计算当前高亮曲目的索引
+  const highlightIndex = highlightTrackId 
+    ? sortedTracks.findIndex(t => t.id === highlightTrackId) 
+    : -1;
+
+
+useEffect(() => {
+  if (!lastPlayedRef.current) return;
+  if (highlightIndex < 0) return;
+  if (loading) return;
+
+  const currentId = highlightTrackId;
+
+  // ✅ 只在切歌时触发
+  if (prevHighlightRef.current === currentId) return;
+  prevHighlightRef.current = currentId;
+
+  // 使用原生 scrollIntoView 确保移动端兼容性
+  lastPlayedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}, [highlightTrackId, highlightIndex, loading]);
+
+
   const handleSaveSettings = async () => {
     if (!editName.trim()) return;
     setSaving(true);
     try {
-      await updatePlaylist(playlistId, { name: editName.trim(), playMode: editPlayMode });
+      // 传给后端空字符串表示使用全局配置（清除列表的独立配置）
+      await updatePlaylist(playlistId, { name: editName.trim(), playMode: editPlayMode, qualityMode: editQualityMode });
       if (editSkipIntro > 0 || editSkipOutro > 0) {
         await setSkipSettings(playlistId, { skipIntro: editSkipIntro, skipOutro: editSkipOutro });
       }
@@ -192,7 +229,8 @@ export function PlaylistDetail({ playlistId, onClose }: {
         name: editName.trim(),
         play_mode: editPlayMode,
         skip_intro: editSkipIntro,
-        skip_outro: editSkipOutro
+        skip_outro: editSkipOutro,
+        quality_mode: editQualityMode
       }));
       setShowSettings(false);
     } catch (err) {
@@ -251,7 +289,8 @@ export function PlaylistDetail({ playlistId, onClose }: {
             isAuto: taskResult.playlist.is_auto === 1,
             playMode: taskResult.playlist.play_mode,
             skipIntro: taskResult.playlist.skip_intro,
-            skipOutro: taskResult.playlist.skip_outro
+            skipOutro: taskResult.playlist.skip_outro,
+            qualityMode: taskResult.playlist.quality_mode
           };
           setCurrentPlaylist(pl, taskResult.tracks);
           setCurrentTrack(taskResult.tracks[0]);
@@ -269,7 +308,8 @@ export function PlaylistDetail({ playlistId, onClose }: {
             isAuto: result.playlist.is_auto === 1,
             playMode: result.playlist.play_mode,
             skipIntro: result.playlist.skip_intro,
-            skipOutro: result.playlist.skip_outro
+            skipOutro: result.playlist.skip_outro,
+            qualityMode: result.playlist.quality_mode
           };
           setCurrentPlaylist(pl, result.tracks);
           setCurrentTrack(result.tracks[0]);
@@ -298,7 +338,8 @@ export function PlaylistDetail({ playlistId, onClose }: {
         isAuto: playlist.is_auto === 1,
         playMode: playlist.play_mode,
         skipIntro: playlist.skip_intro,
-        skipOutro: playlist.skip_outro
+        skipOutro: playlist.skip_outro,
+        qualityMode: playlist.quality_mode
       };
       setCurrentPlaylist(pl, tracks);
       setCurrentTrack(track);
@@ -339,7 +380,9 @@ export function PlaylistDetail({ playlistId, onClose }: {
     }
   };
 
-  if (loading) return <div className="p-4 text-gray-500">加载中...</div>;
+if (loading && !playlist) {
+  return <div className="p-4 text-gray-500">加载中...</div>;
+}
   if (!playlist) return <div className="p-4 text-gray-500">播放列表不存在</div>;
 
   return (
@@ -351,12 +394,16 @@ export function PlaylistDetail({ playlistId, onClose }: {
           <div className="text-xs text-gray-500">{tracks.length} 首歌曲 · 模式: {PLAY_MODES.find(m => m.value === playlist.play_mode)?.label || playlist.play_mode}</div>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setShowSettings(true)} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">⚙️ 设置</button>
-          <button onClick={handleRefreshAndPlay} disabled={refreshing} className="px-3 py-1 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded text-sm">
-            {refreshing ? '🔄 扫描中...' : '🔄 重新扫描'}
+          <button onClick={() => setShowSettings(true)} className="p-2 bg-gray-600 hover:bg-gray-500 rounded md:px-3" title="设置">
+            <span className="md:hidden">⚙️</span><span className="hidden md:inline">⚙️ 设置</span>
+          </button>
+          <button onClick={handleRefreshAndPlay} disabled={refreshing} className="p-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded md:px-3" title={refreshing ? '扫描中...' : '重新扫描'}>
+            <span className="md:hidden">{refreshing ? '⏳' : '🔄'}</span><span className="hidden md:inline">{refreshing ? '🔄 扫描中...' : '🔄 重新扫描'}</span>
           </button>
           <span id="scan-status" className="px-2 py-1 text-xs text-gray-400"></span>
-          <button onClick={onClose} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">返回</button>
+          <button onClick={onClose} className="p-2 bg-gray-600 hover:bg-gray-500 rounded md:px-3" title="返回">
+            <span className="md:hidden">⬅️</span><span className="hidden md:inline">返回</span>
+          </button>
         </div>
       </div>
 
@@ -381,6 +428,19 @@ export function PlaylistDetail({ playlistId, onClose }: {
             >
               {PLAY_MODES.map((m) => (
                 <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="mb-3">
+            <label className="block text-sm text-gray-400 mb-1">省流模式（留空使用全局配置）</label>
+            <select
+              value={editQualityMode}
+              onChange={(e) => setEditQualityMode(e.target.value)}
+              className="w-full px-3 py-1 bg-gray-700 rounded text-sm"
+            >
+              <option value="">跟随全局设置</option>
+              {QUALITY_MODES.filter(m => m.id !== 'lossless').map((m) => (
+                <option key={m.id} value={m.id}>{m.label} ({m.description})</option>
               ))}
             </select>
           </div>
@@ -520,7 +580,7 @@ export function PlaylistDetail({ playlistId, onClose }: {
       </div>
 
       {/* 音轨列表 */}
-      <div className="flex-1 overflow-auto p-2">
+      <div ref={listContainerRef} className="flex-1 overflow-auto p-2">
         {tracks.length === 0 ? (
           <div className="text-center text-gray-500 py-8">
             暂无音轨<br/>

@@ -27,12 +27,14 @@ export function needsFormatTranscode(filePath: string): boolean {
 }
 
 // 格式化标题（用于文件列表显示）
-export function formatTrackTitle(track: { title: string; path: string }, qualityMode?: string): string {
+export function formatTrackTitle(track: { title: string; path: string }, qualityMode?: string, needsTranscode?: boolean): string {
   const fileName = getFileName(track.path);
   
-  // 如果设置了省流模式且不是无损，显示品质标签
-  if (qualityMode && qualityMode !== 'lossless') {
+  // 如果需要转码，显示品质标签
+  if (needsTranscode && qualityMode && qualityMode !== 'lossless') {
     const labels: Record<string, string> = {
+      ultra_low: '极低',
+      very_low: '超低',
       low: '低品质',
       medium: '中品质',
       high: '高品质'

@@ -244,7 +244,7 @@ export function SearchView() {
   return (
     <div className="h-full flex flex-col">
       {/* 搜索框 */}
-      <div className="p-3 border-b border-gray-700">
+      <div className="p-2 md:p-3 border-b border-gray-700">
         <div className="relative">
           <input
             ref={inputRef}
@@ -252,7 +252,7 @@ export function SearchView() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索歌曲（支持拼音/首字母）"
-            className="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 pl-10 text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
+            className="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 pl-10 text-white placeholder-gray-400 focus:outline-none focus:border-purple-500 text-sm"
           />
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
           {query && (
@@ -268,21 +268,21 @@ export function SearchView() {
             </button>
           )}
         </div>
-        <div className="text-xs text-gray-500 mt-1">
+        <div className="text-xs text-gray-500 mt-1 hidden sm:block">
           支持文件名、路径、演唱者搜索，支持拼音首字母
         </div>
       </div>
 
       {/* 匹配条件 */}
-      <div className="p-3 border-b border-gray-700 bg-gray-800/50">
+      <div className="p-2 md:p-3 border-b border-gray-700 bg-gray-800/50">
         <div className="text-xs text-gray-400 mb-2">筛选条件（多条件 AND）:</div>
         
         {/* 已添加的条件列表 */}
         {matchConditions.length > 0 && (
-          <div className="mb-2 border border-gray-600 rounded p-2">
+          <div className="mb-2 border border-gray-600 rounded-lg p-2">
             {matchConditions.map((cond, index) => (
               <div key={index} className="flex items-center gap-2 py-0.5">
-                <span className="text-sm flex-1">
+                <span className="text-xs sm:text-sm flex-1 truncate">
                   {MATCH_FIELDS.find(f => f.value === cond.match_field)?.label || cond.match_field}
                   {' '}
                   {MATCH_OP_LABELS[cond.match_op] || cond.match_op}
@@ -291,7 +291,7 @@ export function SearchView() {
                 </span>
                 <button
                   onClick={() => handleRemoveCondition(index)}
-                  className="text-red-400 hover:text-red-300 text-xs"
+                  className="text-red-400 hover:text-red-300 text-xs shrink-0"
                 >
                   ✕
                 </button>
@@ -301,7 +301,7 @@ export function SearchView() {
         )}
         
         {/* 添加新条件 */}
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center">
           <select
             value={matchField}
             onChange={(e) => {
@@ -309,7 +309,7 @@ export function SearchView() {
               const field = MATCH_FIELDS.find(f => f.value === e.target.value);
               if (field) setMatchOp(field.ops[0]);
             }}
-            className="px-2 py-1 bg-gray-700 rounded text-sm"
+            className="px-2 py-1 bg-gray-700 rounded-lg text-xs sm:text-sm"
           >
             {MATCH_FIELDS.map((f) => (
               <option key={f.value} value={f.value}>{f.label}</option>
@@ -318,7 +318,7 @@ export function SearchView() {
           <select
             value={matchOp}
             onChange={(e) => setMatchOp(e.target.value)}
-            className="px-2 py-1 bg-gray-700 rounded text-sm"
+            className="px-2 py-1 bg-gray-700 rounded-lg text-xs sm:text-sm"
           >
             {MATCH_FIELDS.find(f => f.value === matchField)?.ops.map((op) => (
               <option key={op} value={op}>{MATCH_OP_LABELS[op] || op}</option>
@@ -328,7 +328,7 @@ export function SearchView() {
             <select
               value={matchValue}
               onChange={(e) => setMatchValue(e.target.value)}
-              className="flex-1 px-2 py-1 bg-gray-700 rounded text-sm"
+              className="flex-1 min-w-[80px] px-2 py-1 bg-gray-700 rounded-lg text-xs sm:text-sm"
             >
               <option value="">选择标签...</option>
               {tags.map((t) => (
@@ -341,13 +341,13 @@ export function SearchView() {
               value={matchValue}
               onChange={(e) => setMatchValue(e.target.value)}
               placeholder="值..."
-              className="flex-1 px-2 py-1 bg-gray-700 rounded text-sm"
+              className="flex-1 min-w-[80px] px-2 py-1 bg-gray-700 rounded-lg text-xs sm:text-sm"
             />
           )}
           <button
             onClick={handleAddCondition}
             disabled={!matchValue.trim()}
-            className="px-2 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm"
+            className="px-2 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-xs sm:text-sm"
           >
             添加
           </button>
@@ -367,11 +367,11 @@ export function SearchView() {
             {results.map((track) => (
               <div
                 key={track.id}
-                className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer"
+                className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded-lg cursor-pointer"
                 onClick={() => handlePlayFile(track)}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="truncate text-sm">
+                  <div className="truncate text-xs sm:text-sm">
                     {highlightMatch(track.title || getFileName(track.path), query)}
                   </div>
                   {track.artist && (
@@ -379,12 +379,12 @@ export function SearchView() {
                       {track.artist} {track.album && `- ${track.album}`}
                     </div>
                   )}
-                  <div className="text-xs text-gray-500 truncate">
+                  <div className="text-xs text-gray-500 truncate hidden sm:block">
                     {track.path}
                   </div>
                 </div>
                 {track.rating !== undefined && track.rating !== 0 && (
-                  <span className="text-xs text-yellow-500" title={`评分: ${track.rating}`}>
+                  <span className="text-xs text-yellow-500 shrink-0" title={`评分: ${track.rating}`}>
                     ⭐{track.rating > 0 ? `+${track.rating}` : track.rating}
                   </span>
                 )}
@@ -393,7 +393,7 @@ export function SearchView() {
                     e.stopPropagation();
                     handlePlayFile(track);
                   }}
-                  className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-xs"
+                  className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded-lg text-xs shrink-0"
                   title="播放"
                 >
                   ▶️

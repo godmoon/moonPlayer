@@ -1,15 +1,14 @@
 // 音频播放器相关常量和工具函数
 
-export type PlayMode = 'sequential' | 'shuffle' | 'weighted' | 'random' | 'single-loop';
+export type PlayMode = 'sequential' | 'shuffle' | 'weighted' | 'random';
 
-export const PLAY_MODES: PlayMode[] = ['sequential', 'shuffle', 'weighted', 'random', 'single-loop'];
+export const PLAY_MODES: PlayMode[] = ['sequential', 'shuffle', 'weighted', 'random'];
 
 export const PLAY_MODE_LABELS: Record<PlayMode, { icon: string; label: string }> = {
   sequential: { icon: '➡️', label: '顺序播放' },
   shuffle: { icon: '🔀', label: '随机播放' },
   weighted: { icon: '⚖️', label: '权重随机' },
-  random: { icon: '🎲', label: '乱序播放' },
-  'single-loop': { icon: '🔁', label: '单曲循环' }
+  random: { icon: '🎲', label: '乱序播放' }
 };
 
 export const SKIP_AMOUNTS = [5, 10, 30, 60, 120];

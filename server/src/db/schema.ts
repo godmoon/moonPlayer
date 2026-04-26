@@ -417,6 +417,9 @@ function migrateDatabase(db: Database) {
   if (!playlistsColumns.includes('skip_outro')) {
     db.exec('ALTER TABLE playlists ADD COLUMN skip_outro REAL DEFAULT 0');
   }
+  if (!playlistsColumns.includes('quality_mode')) {
+    db.exec('ALTER TABLE playlists ADD COLUMN quality_mode TEXT');
+  }
 
   // 检查并添加 playlist_items 表的新字段
   const itemsInfo = db.prepare('PRAGMA table_info(playlist_items)').all() as { name: string }[];

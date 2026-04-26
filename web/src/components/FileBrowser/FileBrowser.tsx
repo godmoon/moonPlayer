@@ -269,15 +269,15 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-3 border-b border-gray-700 flex items-center gap-2">
-        <button onClick={handleRootClick} className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">🏠 根目录</button>
-        {parentPath && (<button onClick={isWebdavView ? () => currentWebdav && loadWebdavDirectory(currentWebdav, parentPath) : () => loadDirectory(parentPath)} className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">⬆️ 上级</button>)}
-        <span className="flex-1 text-gray-400 text-sm truncate">
+      <div className="p-2 md:p-3 border-b border-gray-700 flex flex-wrap items-center gap-2">
+        <button onClick={handleRootClick} className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs md:text-sm flex items-center gap-1">🏠 <span className="hidden sm:inline">根目录</span></button>
+        {parentPath && (<button onClick={isWebdavView ? () => currentWebdav && loadWebdavDirectory(currentWebdav, parentPath) : () => loadDirectory(parentPath)} className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs md:text-sm flex items-center gap-1">⬆️ <span className="hidden sm:inline">上级</span></button>)}
+        <span className="flex-1 text-gray-400 text-xs md:text-sm truncate min-w-0">
           {isWebdavView && currentWebdav ? `☁️ ${currentWebdav.name}: ` : ''}{currentPath || rootPath}
         </span>
         {onRecycleBin && (
-          <button onClick={onRecycleBin} className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm" title="回收站">
-            🗑️ 回收站
+          <button onClick={onRecycleBin} className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs md:text-sm" title="回收站">
+            🗑️ <span className="hidden sm:inline">回收站</span>
           </button>
         )}
       </div>
@@ -290,11 +290,17 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
               <>
                 <div className="text-gray-400 text-sm mb-2 px-2">本地目录：</div>
                 {directories.map((dir) => (
-                  <div key={dir.path} className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer" onClick={() => loadDirectory(dir.path)}>
+                  <div key={dir.path} className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded-lg cursor-pointer" onClick={() => loadDirectory(dir.path)}>
                     <span className="text-yellow-500">📁</span>
-                    <span className="flex-1 truncate">{dir.name}</span>
-                    <button onClick={(e) => { e.stopPropagation(); handleOpenAddModal('directory', dir.path); }} className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded text-xs" title="添加到播放列表">➕</button>
-                    <button onClick={(e) => { e.stopPropagation(); handlePlayDirectory(dir.path); }} className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-xs" title="播放">▶️</button>
+                    <span className="flex-1 truncate text-sm">{dir.name}</span>
+                    <button onClick={(e) => { e.stopPropagation(); handleOpenAddModal('directory', dir.path); }} className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded-lg text-xs flex items-center gap-1" title="添加到播放列表">
+                      <span className="hidden sm:inline">➕ 添加</span>
+                      <span className="sm:hidden">➕</span>
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handlePlayDirectory(dir.path); }} className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded-lg text-xs flex items-center gap-1" title="播放">
+                      <span className="hidden sm:inline">▶️ 播放</span>
+                      <span className="sm:hidden">▶️</span>
+                    </button>
                   </div>
                 ))}
                 
@@ -316,7 +322,7 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
                 {directories.map((dir) => (
                   <div
                     key={dir.path}
-                    className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer"
+                    className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded-lg cursor-pointer"
                     onClick={() => {
                       if (isWebdavView && currentWebdav) {
                         loadWebdavDirectory(currentWebdav, dir.path);
@@ -326,21 +332,34 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
                     }}
                   >
                     <span className="text-yellow-500">📁</span>
-                    <span className="flex-1 truncate">{dir.name}</span>
-                    <button onClick={(e) => { e.stopPropagation(); handleOpenAddModal('directory', dir.path); }} className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded text-xs" title="添加到播放列表">➕</button>
-                    <button onClick={(e) => { e.stopPropagation(); handlePlayDirectory(dir.path); }} className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-xs" title="播放">▶️</button>
+                    <span className="flex-1 truncate text-sm">{dir.name}</span>
+                    <button onClick={(e) => { e.stopPropagation(); handleOpenAddModal('directory', dir.path); }} className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded-lg text-xs flex items-center gap-1" title="添加到播放列表">
+                      <span className="hidden sm:inline">➕ 添加</span>
+                      <span className="sm:hidden">➕</span>
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handlePlayDirectory(dir.path); }} className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded-lg text-xs flex items-center gap-1" title="播放">
+                      <span className="hidden sm:inline">▶️ 播放</span>
+                      <span className="sm:hidden">▶️</span>
+                    </button>
                   </div>
                 ))}
 
                 {files.map((file) => (
                   <div
                     key={file.path}
-                    className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer"
+                    className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded-lg cursor-pointer"
                     onClick={() => handlePlayFile(file.path)}
                   >
-                    <span className="flex-1 truncate">{file.name}</span>
-                    <button onClick={(e) => { e.stopPropagation(); handleOpenAddModal('file', file.path); }} className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded text-xs" title="添加到播放列表">➕</button>
-                    <button onClick={(e) => { e.stopPropagation(); handlePlayFile(file.path); }} className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-xs" title="播放">▶️</button>
+                    <span className="text-blue-400">🎵</span>
+                    <span className="flex-1 truncate text-sm">{file.name}</span>
+                    <button onClick={(e) => { e.stopPropagation(); handleOpenAddModal('file', file.path); }} className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded-lg text-xs flex items-center gap-1" title="添加到播放列表">
+                      <span className="hidden sm:inline">➕ 添加</span>
+                      <span className="sm:hidden">➕</span>
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handlePlayFile(file.path); }} className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded-lg text-xs flex items-center gap-1" title="播放">
+                      <span className="hidden sm:inline">▶️ 播放</span>
+                      <span className="sm:hidden">▶️</span>
+                    </button>
                   </div>
                 ))}
 
