@@ -192,7 +192,7 @@ export function SearchView() {
 
       if (existing.playlist) {
         playlist = existing.playlist;
-        const refreshed = await refreshPlaylist(playlist.id);
+        const refreshed = await refreshPlaylist(playlist.id, true);
         let trackList = refreshed.tracks as Track[];
 
         const existingTrack = trackList.find((t: Track) => t.id === trackId);
@@ -215,7 +215,7 @@ export function SearchView() {
           { type: 'directory', path: parentDir, includeSubdirs: false }
         ], true);
 
-        const refreshed = await refreshPlaylist(playlist.id);
+        const refreshed = await refreshPlaylist(playlist.id, true);
         const trackList = refreshed.tracks as Track[];
 
         if (trackList.length > 0) {
