@@ -41,16 +41,34 @@ function getSkipAmount(direction: 'forward' | 'backward'): number {
   return amount;
 }
 
+// 立即同步状态到原生 App
+function syncToNative() {
+  const state = usePlayerStore.getState();
+  const audio = getAudio();
+  updateNativeMedia(state, audio);
+}
+
 // 设置原生桥接
 export function setupNativeBridge() {
   // 暴露桥接接口给原生 App 调用
   (window as any).MoonPlayerBridge = {
     play: () => {
       const store = usePlayerStore.getState();
-      store.setIsPlaying(true);
       const audio = getAudio();
       if (audio && audio.paused) {
-        audio.play().catch(() => {});
+        store.setIsPlaying(true);
+        audio.play().catch(() => {
+          // 如果播放失败，纠正状态并立即同步
+          store.setIsPlaying(false);
+          syncToNative();
+        });
+        syncToNative();
+      } else if (audio && !audio.paused) {
+        // 已经在播放，仅同步状态
+        syncToNative();
+      } else {
+        // 没有音频元素（无当前曲目），不设置 isPlaying，仅同步
+        syncToNative();
       }
     },
     pause: () => {
@@ -58,16 +76,21 @@ export function setupNativeBridge() {
       store.setIsPlaying(false);
       const audio = getAudio();
       if (audio) audio.pause();
+      // 立即同步状态
+      syncToNative();
     },
     next: () => {
       const store = usePlayerStore.getState();
       store.playNext();
       store.setIsPlaying(true);
+      // 切歌后等一小段时间让音频元素更新，再同步
+      setTimeout(syncToNative, 200);
     },
     prev: () => {
       const store = usePlayerStore.getState();
       store.playPrevious();
       store.setIsPlaying(true);
+      setTimeout(syncToNative, 200);
     },
     forward: () => {
       const audio = getAudio();
@@ -80,8 +103,10 @@ export function setupNativeBridge() {
         // 超出文件，切换下一曲
         store.playNext();
         store.setIsPlaying(true);
+        setTimeout(syncToNative, 200);
       } else {
         audio.currentTime = Math.min(newTime, duration - 0.5);
+        syncToNative();
       }
     },
     backward: () => {
@@ -100,9 +125,11 @@ export function setupNativeBridge() {
           if (newAudio && newAudio.duration > 0) {
             newAudio.currentTime = Math.max(0, newAudio.duration - amount);
           }
+          syncToNative();
         }, 500);
       } else {
         audio.currentTime = Math.max(newTime, 0);
+        syncToNative();
       }
     },
     seek: (positionSec: number) => {
@@ -120,6 +147,7 @@ export function setupNativeBridge() {
       const seekTime = Math.max(0, Math.min(positionSec, duration - 0.5));
       console.log('[NativeBridge] seek to:', seekTime, 'duration:', duration);
       audio.currentTime = seekTime;
+      syncToNative();
     }
   };
 

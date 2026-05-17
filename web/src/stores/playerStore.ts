@@ -163,13 +163,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setCurrentTrack: (track) => set({ currentTrack: track }),
 
   setCurrentPlaylist: (playlist, tracks) => set((state) => {
-    // 播放列表配置优先于全局，不修改全局品质设置
+    // 如果是同一个播放列表（id 相同），保留用户手动修改的 playMode
+    const samePlaylist = state.currentPlaylist && playlist && state.currentPlaylist.id === playlist.id;
+    const playMode = samePlaylist ? (state.playMode) : ((playlist?.playMode as PlayMode) || state.playMode);
     return {
       currentPlaylist: playlist,
       playlistTracks: tracks,
       shuffleQueue: generateShuffleQueue(tracks.length),
       shuffleIndex: 0,
-      playMode: (playlist?.playMode as PlayMode) || state.playMode
+      playMode
     };
   }),
 
@@ -188,6 +190,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       });
     } else {
       set({ playMode: mode });
+    }
+    // 同步更新 currentPlaylist 中的 playMode，方便后续 setCurrentPlaylist 判断
+    if (state.currentPlaylist) {
+      set({ currentPlaylist: { ...state.currentPlaylist, playMode: mode } });
     }
   },
 

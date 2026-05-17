@@ -1,17 +1,33 @@
 // 歌曲信息弹窗组件
+import { useState, useEffect } from 'react';
 import { usePlayerStore } from '../../stores/playerStore';
+import { getTrack } from '../../stores/api';
 
 interface TrackInfoModalProps {
   onClose: () => void;
   streamBitrate?: number | null;
   sourceBitrate?: number | null;
   needsTranscode?: boolean;
+  channels?: number | null;
+  isDts?: boolean;
 }
 
-export function TrackInfoModal({ onClose, streamBitrate, sourceBitrate, needsTranscode }: TrackInfoModalProps) {
+export function TrackInfoModal({ onClose, streamBitrate, sourceBitrate, needsTranscode, channels, isDts }: TrackInfoModalProps) {
   const { currentTrack } = usePlayerStore();
+  const [trackInfo, setTrackInfo] = useState<any>(null);
+
+  useEffect(() => {
+    if (currentTrack) {
+      getTrack(currentTrack.id).then(data => {
+        if (data) setTrackInfo(data);
+      });
+    }
+  }, [currentTrack]);
 
   if (!currentTrack) return null;
+
+  const artist = trackInfo?.artist || currentTrack.artist || '-';
+  const album = trackInfo?.album || currentTrack.album || '-';
 
   const formatDate = (timestamp?: number) => {
     if (!timestamp) return '-';
@@ -39,11 +55,11 @@ export function TrackInfoModal({ onClose, streamBitrate, sourceBitrate, needsTra
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="text-gray-400 text-xs">艺术家</div>
-              <div className="text-white">{currentTrack.artist || '-'}</div>
+              <div className="text-white">{artist}</div>
             </div>
             <div>
               <div className="text-gray-400 text-xs">专辑</div>
-              <div className="text-white">{currentTrack.album || '-'}</div>
+              <div className="text-white">{album}</div>
             </div>
           </div>
 
@@ -69,8 +85,8 @@ export function TrackInfoModal({ onClose, streamBitrate, sourceBitrate, needsTra
               <div className="text-white">{formatDuration(currentTrack.duration)}</div>
             </div>
             <div>
-              <div className="text-gray-400 text-xs">添加日期</div>
-              <div className="text-white text-xs">{formatDate(currentTrack.dateAdded)}</div>
+              <div className="text-gray-400 text-xs">声道</div>
+              <div className="text-white">{isDts && channels ? `FLAC ${channels}声道` : '-'}</div>
             </div>
           </div>
 

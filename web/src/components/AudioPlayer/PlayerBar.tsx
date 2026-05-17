@@ -3,13 +3,13 @@ import { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react
 import AudioPlayer from 'react-h5-audio-player';
 import 'react-h5-audio-player/lib/styles.css';
 import { usePlayerStore, type QualityMode } from '../../stores/playerStore';
-import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory } from '../../stores/api';
+import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory, getTrack } from '../../stores/api';
 import { getDuration, getStreamBitrate } from '../../stores/api';
 import { AddToPlaylistModal } from '../AddToPlaylistModal';
 import { SleepTimerModal } from './SleepTimerModal';
 import { TrackInfoModal } from './TrackInfoModal';
 import { PLAY_MODES, PLAY_MODE_LABELS, SKIP_AMOUNTS, setPendingSeekPosition, consumePendingSeekPosition, getLockedPosition, clearLockedPosition, formatTrackTitle } from './utils';
-import { registerAudioElementFn } from '../../utils/nativeBridge';
+import { registerAudioElementFn, isNativeApp } from '../../utils/nativeBridge';
 import type { PlayMode } from './utils';
 
 // 导出设置待恢复位置的函数
@@ -46,6 +46,7 @@ export function PlayerBar() {
   const [streamBitrate, setStreamBitrate] = useState<number | null>(null);
   const [sourceBitrate, setSourceBitrate] = useState<number | null>(null);
   const [needsTranscode, setNeedsTranscode] = useState(false);
+  const [channelInfo, setChannelInfo] = useState<{ channels: number | null; isDts: boolean }>({ channels: null, isDts: false });
   const [isSingleLoop, setIsSingleLoop] = useState(false);
   
   // 🚗 车机环境检测
@@ -94,18 +95,35 @@ const getAudio = useCallback(() => {
        if (audio && currentTrack) {
          const realIsPlaying = !audio.paused && !audio.ended;
          const storeState = usePlayerStore.getState();
-         if (realIsPlaying !== storeState.isPlaying) {
-           console.log('[PlayerBar] 可见性恢复：同步播放状态', { realIsPlaying, storeIsPlaying: storeState.isPlaying });
+         const storeThoughtPlaying = storeState.isPlaying;
+         if (realIsPlaying !== storeThoughtPlaying) {
+           console.log('[PlayerBar] 可见性恢复：同步播放状态', { realIsPlaying, storeIsPlaying: storeThoughtPlaying });
            storeState.setIsPlaying(realIsPlaying);
          }
          if ('mediaSession' in navigator) {
            navigator.mediaSession.playbackState = realIsPlaying ? 'playing' : 'paused';
          }
-         if (storeState.isPlaying && !realIsPlaying) {
-           audio.play().catch((e: any) => console.log('[PlayerBar] 恢复播放失败:', e.message));
-         }
-       }
-       pageWasHiddenRef.current = false;
+          // 如果 Store 认为应该播放但音频实际暂停了，尝试恢复播放
+          if (storeThoughtPlaying && !realIsPlaying) {
+            audio.play().catch((e: any) => console.log('[PlayerBar] 恢复播放失败:', e.message));
+          }
+          // 同步状态到原生端（Android 通知栏/MediaSession）
+          if (isNativeApp() && (window as any).MoonPlayerApp) {
+            try {
+              (window as any).MoonPlayerApp.updateMedia(JSON.stringify({
+                title: currentTrack?.title || 'MoonPlayer',
+                artist: currentTrack?.artist || '',
+                album: currentTrack?.album || '',
+                duration: audio?.duration || 0,
+                position: audio?.currentTime || 0,
+                isPlaying: realIsPlaying
+              }));
+            } catch (e) {
+              console.error('[PlayerBar] 可见性恢复同步原生失败:', e);
+            }
+          }
+        }
+        pageWasHiddenRef.current = false;
      } else if (!isVisible) {
        pageWasHiddenRef.current = true;
      }
@@ -117,7 +135,7 @@ const getAudio = useCallback(() => {
  // 更新页面标题为当前播放歌曲
   useEffect(() => {
     if (currentTrack) {
-      document.title = `${formatTrackTitle(currentTrack, effectiveQualityMode, needsTranscode)} - MoonPlayer`;
+      document.title = `${formatTrackTitle(currentTrack, effectiveQualityMode, needsTranscode, channelInfo)} - MoonPlayer`;
     } else {
       document.title = 'MoonPlayer';
     }
@@ -136,6 +154,7 @@ const getAudio = useCallback(() => {
         setStreamBitrate(result.bitrate);
         setSourceBitrate(result.sourceBitrate);
         setNeedsTranscode(result.needsTranscode);
+        setChannelInfo({ channels: result.channels ?? null, isDts: result.isDts ?? false });
       }
     });
   }, [currentTrack, effectiveQualityMode]);
@@ -395,16 +414,31 @@ const handlePause = useCallback(() => {
       } catch {}
     };
 
-    if (!isFinite(duration) || duration === 0) {
-      currentTrack && getDuration(currentTrack.id).then(d => {
+    // 如果没有时长或没有艺术家/专辑，则获取
+    const hasArtist = currentTrack?.artist?.trim();
+    const hasAlbum = currentTrack?.album?.trim();
+    if (currentTrack && (!isFinite(duration) || duration === 0 || !hasArtist || !hasAlbum)) {
+      getDuration(currentTrack.id).then(d => {
         if (d && isFinite(d)) { setDuration(d); safeSeek(pendingPos); }
       });
-      return;
+      // 获取艺术家和专辑信息
+      getTrack(currentTrack.id).then(track => {
+        if (track) {
+          setCurrentTrack({
+            ...currentTrack,
+            artist: track.artist || currentTrack.artist,
+            album: track.album || currentTrack.album,
+            duration: track.duration || currentTrack.duration || duration
+          });
+        }
+      });
     }
 
-    setDuration(duration);
-    safeSeek(pendingPos);
-  }, [setDuration, currentTrack]);
+    if (isFinite(duration) && duration > 0) {
+      setDuration(duration);
+      safeSeek(pendingPos);
+    }
+  }, [setDuration, setCurrentTrack, currentTrack]);
 
   // 上一曲/下一曲
   const handlePreviousOrNext = useCallback(async (direction: 'prev' | 'next') => {
@@ -441,12 +475,38 @@ const handlePlayWrapped = useCallback(() => {
 
   // 1. 代码触发的系统事件：跳过
   if (isProgrammaticRef.current) {
-    //console.log("✅ 代码触发，跳过");
     return;
   }
 
-  // 2. 非车机跳过
+  // 2. 非车机模式：同步 store 和原生状态
   if (!carEnvInfo.isCarEnv) {
+    const audio = getAudio();
+    if (audio) {
+      const realIsPlaying = !audio.paused && !audio.ended;
+      const currentIsPlaying = usePlayerStore.getState().isPlaying;
+      if (realIsPlaying !== currentIsPlaying) {
+        setIsPlaying(realIsPlaying);
+        wasPlayingRef.current = realIsPlaying;
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = realIsPlaying ? 'playing' : 'paused';
+        }
+        // 同步到原生端
+        if (isNativeApp() && (window as any).MoonPlayerApp) {
+          try {
+            (window as any).MoonPlayerApp.updateMedia(JSON.stringify({
+              title: currentTrack?.title || 'MoonPlayer',
+              artist: currentTrack?.artist || '',
+              album: currentTrack?.album || '',
+              duration: audio.duration || 0,
+              position: audio.currentTime || 0,
+              isPlaying: realIsPlaying
+            }));
+          } catch (e) {
+            console.error('[PlayerBar] 同步原生失败:', e);
+          }
+        }
+      }
+    }
     return;
   }
 
@@ -666,14 +726,15 @@ useEffect(() => {
 
   // 切换播放模式
   const handleTogglePlayMode = useCallback(async () => {
-    const i = PLAY_MODES.indexOf(playMode as PlayMode);
+    const currentPlayMode = usePlayerStore.getState().playMode;
+    const i = PLAY_MODES.indexOf(currentPlayMode as PlayMode);
     const next = PLAY_MODES[(i+1)%PLAY_MODES.length];
     setPlayMode(next);
     if (currentPlaylist?.id) {
       try { await updatePlaylist(currentPlaylist.id, { playMode: next }); }
       catch (e) { console.error(e); }
     }
-  }, [playMode, currentPlaylist, setPlayMode]);
+  }, [currentPlaylist, setPlayMode]);
 
   const { icon: playModeIcon, label: playModeLabel } = PLAY_MODE_LABELS[playMode as PlayMode] || PLAY_MODE_LABELS.sequential;
 
@@ -695,7 +756,7 @@ useEffect(() => {
         {/* 歌名和快捷信息 */}
         <div className="flex items-center justify-between gap-2">
           <div className="text-white font-medium text-base truncate flex-1 min-w-0">
-            {currentTrack && formatTrackTitle(currentTrack, effectiveQualityMode, needsTranscode)}
+            {currentTrack && formatTrackTitle(currentTrack, effectiveQualityMode, needsTranscode, channelInfo)}
           </div>
           <div className="flex items-center gap-1 text-xs text-gray-400 flex-shrink-0">
             <span>{currentTrack?.rating ? `${currentTrack.rating > 0 ? '+' : ''}${currentTrack.rating}` : ''}</span>
@@ -721,7 +782,15 @@ useEffect(() => {
             }
             .rhap_controls-section {
               width: 100% !important;
-              justify-content: center !important;
+              justify-content: space-between !important;
+            }
+            .rhap_main-controls {
+              flex: 0 0 auto !important;
+              justify-content: flex-start !important;
+            }
+            .rhap_additional-controls {
+              flex: 0 0 auto !important;
+              justify-content: flex-start !important;
             }
             .rhap_progress-section {
               display: flex !important;
@@ -897,7 +966,7 @@ useEffect(() => {
       )}
 
       {showTrackInfoModal && (
-        <TrackInfoModal onClose={() => setShowTrackInfoModal(false)} streamBitrate={streamBitrate} sourceBitrate={sourceBitrate} needsTranscode={needsTranscode} />
+        <TrackInfoModal onClose={() => setShowTrackInfoModal(false)} streamBitrate={streamBitrate} sourceBitrate={sourceBitrate} needsTranscode={needsTranscode} channels={channelInfo.channels} isDts={channelInfo.isDts} />
       )}
 
       {/* 删除失败弹窗 */}

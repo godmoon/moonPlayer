@@ -207,6 +207,11 @@ export async function permanentDeleteTrack(trackId: number): Promise<{ success: 
   return res.data;
 }
 
+export async function clearRecycledTracks(): Promise<{ success: boolean; deletedCount: number; errorCount: number; error?: string }> {
+  const res = await api.delete('/tracks/recycled/clear');
+  return res.data;
+}
+
 export async function removeTrackFromPlaylists(trackId: number): Promise<{ success: boolean }> {
   const res = await api.delete(`/tracks/${trackId}/remove-from-playlists`);
   return res.data;
@@ -250,7 +255,7 @@ export async function getDuration(trackId: number): Promise<number | null> {
   }
 }
 
-export async function getStreamBitrate(trackId: number, qualityMode?: string): Promise<{ bitrate: number | null; sourceBitrate: number | null; needsTranscode: boolean } | null> {
+export async function getStreamBitrate(trackId: number, qualityMode?: string): Promise<{ bitrate: number | null; sourceBitrate: number | null; needsTranscode: boolean; channels?: number | null; isDts?: boolean } | null> {
   try {
     const params = qualityMode ? `?quality=${qualityMode}` : '';
     const res = await api.get(`/stream-bitrate/${trackId}${params}`);

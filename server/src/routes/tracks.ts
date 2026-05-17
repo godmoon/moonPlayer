@@ -504,6 +504,73 @@ export async function trackRoutes(app: FastifyInstance) {
     return { success: true };
   });
 
+  // 清空回收站（删除所有回收站音轨的物理文件）
+  app.delete('/api/tracks/recycled/clear', async (req, reply) => {
+    const recycledTracks = db.prepare(`
+      SELECT * FROM tracks WHERE recycled = 1
+    `).all() as any[];
+
+    let successCount = 0;
+    let errorCount = 0;
+    let lastError: string | null = null;
+
+    for (const track of recycledTracks) {
+      const filePath = track.path;
+      let deleteError: string | null = null;
+
+      try {
+        if (filePath.startsWith('webdav://')) {
+          const parsed = parseWebdavPath(filePath);
+          if (parsed) {
+            const config = getWebdavConfig(parsed.configId);
+            if (config) {
+              const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
+              await client.deleteFile(parsed.webdavPath);
+              const cachePath = getWebdavCachePath(parsed.configId, parsed.webdavPath);
+              if (fs.existsSync(cachePath)) {
+                fs.unlinkSync(cachePath);
+              }
+              const transcodePath = getTranscodeCachePath(filePath, `webdav:${parsed.configId}:`);
+              if (fs.existsSync(transcodePath)) {
+                fs.unlinkSync(transcodePath);
+              }
+            } else {
+              deleteError = 'WebDAV 配置不存在';
+            }
+          } else {
+            deleteError = '无效的 WebDAV 路径';
+          }
+        } else {
+          // 本地文件
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        }
+      } catch (err) {
+        deleteError = `文件删除失败: ${(err as Error).message}`;
+      }
+
+      if (deleteError) {
+        errorCount++;
+        lastError = deleteError;
+      } else {
+        // 删除数据库记录
+        db.prepare('DELETE FROM tracks WHERE id = ?').run(track.id);
+        db.prepare('DELETE FROM play_history WHERE track_id = ?').run(track.id);
+        db.prepare('DELETE FROM skip_history WHERE track_id = ?').run(track.id);
+        successCount++;
+      }
+    }
+
+    saveDatabase();
+
+    if (errorCount > 0 && successCount === 0) {
+      return reply.code(500).send({ error: lastError || '全部删除失败' });
+    }
+
+    return { success: true, deletedCount: successCount, errorCount };
+  });
+
   // 彻底删除音轨（删除物理文件）
   app.delete('/api/tracks/:id/permanent', async (req, reply) => {
     const { id } = req.params as { id: string };

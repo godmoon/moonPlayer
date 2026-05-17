@@ -27,8 +27,14 @@ export function needsFormatTranscode(filePath: string): boolean {
 }
 
 // 格式化标题（用于文件列表显示）
-export function formatTrackTitle(track: { title: string; path: string }, qualityMode?: string, needsTranscode?: boolean): string {
+export function formatTrackTitle(
+  track: { title: string; path: string },
+  qualityMode?: string,
+  needsTranscode?: boolean,
+  channelInfo?: { channels: number | null; isDts: boolean }
+): string {
   const fileName = getFileName(track.path);
+  let extra = '';
   
   // 如果需要转码，显示品质标签
   if (needsTranscode && qualityMode && qualityMode !== 'lossless') {
@@ -39,14 +45,18 @@ export function formatTrackTitle(track: { title: string; path: string }, quality
       medium: '中品质',
       high: '高品质'
     };
-    return `${fileName} [${labels[qualityMode] || ''}]`;
+    extra = `[${labels[qualityMode] || ''}]`;
   }
   
   // 如果文件需要格式转码，显示转码标签
   if (needsFormatTranscode(track.path)) {
-    return `${fileName} [转码]`;
+    extra = '[转码]';
   }
   
-  // 无需转码，直接显示文件名
-  return fileName;
+  // 如果是 DTS/AC3 转码为 FLAC
+  if (channelInfo?.isDts && channelInfo?.channels) {
+    extra = extra ? `${extra} [FLAC ${channelInfo.channels}声道]` : `[FLAC ${channelInfo.channels}声道]`;
+  }
+  
+  return extra ? `${fileName} ${extra}` : fileName;
 }

@@ -70,22 +70,27 @@ export async function streamRoutes(app: FastifyInstance) {
     const qualityMode = quality || 'lossless';
     const targetBitrate = QUALITY_BITRATES[qualityMode] || 0;
 
-    // 检查是否需要格式转码（浏览器不支持的格式）
-    const formatNeedsTranscode = needsTranscode(filePath);
+    // 检查是否需要格式转码（浏览器不支持的格式或 DTS/AC3 多声道）
+    const codecInfo = await getAudioCodec(filePath);
+    app.log.info(`[Stream] track=${id}, codec=${codecInfo}`);
+    const needsDtsTranscode = codecInfo === 'dts' || codecInfo === 'ac3';
+    const formatNeedsTranscode = needsTranscode(filePath) || needsDtsTranscode;
+    const isDtsTranscode = needsDtsTranscode && !needsTranscode(filePath);
     
     // 检查是否需要品质转码
     const sourceBitrate = await getAudioBitrate(filePath);
     const qualityNeedsTranscode = targetBitrate > 0 && sourceBitrate > targetBitrate;
     
     // 确定转码类型
-    const transcodeType = determineTranscodeType(formatNeedsTranscode, qualityNeedsTranscode, qualityMode);
+    const transcodeType = determineTranscodeType(formatNeedsTranscode, qualityNeedsTranscode, qualityMode, isDtsTranscode);
     
     // 如果需要转码
     if (transcodeType.needsTranscode) {
       ensureCacheDir();
       
       // 生成缓存路径（包含品质标识）
-      const cachePath = getQualityTranscodeCachePath(filePath, transcodeType.cacheKey);
+      const ext = isDtsTranscode ? '.flac' : '.mp3';
+      const cachePath = getQualityTranscodeCachePath(filePath, transcodeType.cacheKey, ext);
       
       // 检查缓存是否存在且有效
       let useCache = false;
@@ -103,9 +108,20 @@ export async function streamRoutes(app: FastifyInstance) {
       // 如果没有有效缓存，执行转码
       if (!useCache) {
         try {
-          await transcodeWithBitrate(filePath, cachePath, transcodeType.bitrate);
+          if (isDtsTranscode) {
+            // FLAC 压缩级别：0=最快, 12=最高压缩
+            const compressionMap: Record<string, number> = {
+              ultra_low: 0, very_low: 1, low: 3, medium: 5, high: 8, lossless: 12
+            };
+            const compressionLevel = compressionMap[qualityMode] || 5;
+            await transcodeDtsToFlac(filePath, cachePath, compressionLevel);
+          } else {
+            await transcodeWithBitrate(filePath, cachePath, transcodeType.bitrate);
+          }
         } catch (err) {
-          return reply.code(500).send({ error: '转码失败' });
+          const msg = (err as Error).message;
+          app.log.error(`[Stream] 转码失败: ${msg}`);
+          return reply.code(500).send({ error: `转码失败: ${msg}` });
         }
       }
       
@@ -113,7 +129,8 @@ export async function streamRoutes(app: FastifyInstance) {
       const stat = fs.statSync(cachePath);
       const fileSize = stat.size;
       
-      reply.header('Content-Type', 'audio/mpeg');
+      const mimeType = isDtsTranscode ? 'audio/flac' : 'audio/mpeg';
+      reply.header('Content-Type', mimeType);
       reply.header('Accept-Ranges', 'bytes');
       
       const range = req.headers.range;
@@ -174,8 +191,10 @@ export async function streamRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: '音轨不存在' });
     }
 
-    // 如果数据库已有时长，直接返回
-    if ((track as any).duration) {
+    // 检查是否需要更新元数据
+    const needsMetadata = !(track as any).duration || !(track as any).artist || !(track as any).album;
+    
+    if (!needsMetadata) {
       return { duration: (track as any).duration };
     }
 
@@ -188,10 +207,10 @@ export async function streamRoutes(app: FastifyInstance) {
       if (match) {
         const configId = parseInt(match[1], 10);
         const webdavPath = match[2];
-        const duration = await getWebdavFileDuration(configId, webdavPath);
+        const { duration, artist, album } = await getWebdavFileMetadata(configId, webdavPath);
         
         if (duration) {
-          db.prepare('UPDATE tracks SET duration = ? WHERE id = ?').run(duration, Number(id));
+          db.prepare('UPDATE tracks SET duration = ?, artist = COALESCE(artist, ?), album = COALESCE(album, ?) WHERE id = ?').run(duration, artist, album, Number(id));
           return { duration };
         }
         return reply.code(500).send({ error: '无法获取 WebDAV 文件时长' });
@@ -200,9 +219,9 @@ export async function streamRoutes(app: FastifyInstance) {
     
     // 本地文件
     try {
-      const duration = await getLocalFileDuration(filePath);
+      const { duration, artist, album } = await getLocalFileMetadata(filePath);
       if (duration) {
-        db.prepare('UPDATE tracks SET duration = ? WHERE id = ?').run(duration, Number(id));
+        db.prepare('UPDATE tracks SET duration = ?, artist = COALESCE(artist, ?), album = COALESCE(album, ?) WHERE id = ?').run(duration, artist, album, Number(id));
         return { duration };
       }
       return reply.code(500).send({ error: '无法获取文件时长' });
@@ -223,6 +242,11 @@ export async function streamRoutes(app: FastifyInstance) {
 
     const filePath = (track as any).path;
     const qualityMode = quality || 'high';
+
+    // 检查是否需要 DTS 转码
+    const codecInfo = filePath.startsWith('webdav://') ? null : await getAudioCodec(filePath);
+    const channels = filePath.startsWith('webdav://') ? null : await getAudioChannels(filePath);
+    const isDts = codecInfo === 'dts' || codecInfo === 'ac3';
 
     // 从设置中获取品质配置
     const QUALITY_BITRATES: Record<string, number> = {
@@ -297,11 +321,11 @@ export async function streamRoutes(app: FastifyInstance) {
 
     // 如果原始比特率高于目标比特率，返回转码后的比特率
     if (sourceBitrate > targetBitrate) {
-      return { bitrate: targetBitrate, sourceBitrate, needsTranscode: true };
+      return { bitrate: targetBitrate, sourceBitrate, needsTranscode: true, channels, isDts };
     }
 
     // 否则返回原始比特率（如果获取不到返回null）
-    return { bitrate: sourceBitrate || null, sourceBitrate: sourceBitrate || null, needsTranscode: false };
+    return { bitrate: sourceBitrate || null, sourceBitrate: sourceBitrate || null, needsTranscode: false, channels, isDts };
   });
 
   // 通过路径直接流式传输（用于未扫描的文件）
@@ -361,45 +385,28 @@ export async function streamRoutes(app: FastifyInstance) {
 }
 
 // 确定转码类型
-function determineTranscodeType(formatNeedsTranscode: boolean, qualityNeedsTranscode: boolean, qualityMode: string): {
-  needsTranscode: boolean;
-  bitrate: number;
-  cacheKey: string;
-  qualityLabel: string | null;
-} {
-  // 优先显示品质标签
+function determineTranscodeType(formatNeedsTranscode: boolean, qualityNeedsTranscode: boolean, qualityMode: string, isDtsTranscode: boolean = false) {
+  // DTS/AC3 需要转码
+  if (isDtsTranscode) {
+    const cacheKey = qualityNeedsTranscode ? 'dts_flac_quality_' + qualityMode : 'dts_flac';
+    const label = qualityNeedsTranscode ? QUALITY_LABELS[qualityMode] || null : null;
+    return { needsTranscode: true, bitrate: qualityNeedsTranscode ? QUALITY_BITRATES[qualityMode] || 0 : 0, cacheKey, qualityLabel: label };
+  }
+  // 品质转码
   if (qualityNeedsTranscode) {
-    return {
-      needsTranscode: true,
-      bitrate: QUALITY_BITRATES[qualityMode] || 192,
-      cacheKey: `quality_${qualityMode}`,
-      qualityLabel: QUALITY_LABELS[qualityMode] || null
-    };
+    return { needsTranscode: true, bitrate: QUALITY_BITRATES[qualityMode] || 192, cacheKey: 'quality_' + qualityMode, qualityLabel: QUALITY_LABELS[qualityMode] || null };
   }
-  
-  // 格式转码（浏览器不支持）
+  // 格式转码
   if (formatNeedsTranscode) {
-    return {
-      needsTranscode: true,
-      bitrate: 192, // 格式转码使用默认 192kbps
-      cacheKey: 'format',
-      qualityLabel: null // 不显示品质标签，前端会显示 [转码]
-    };
+    return { needsTranscode: true, bitrate: 192, cacheKey: 'format', qualityLabel: null as string | null };
   }
-  
-  // 无需转码
-  return {
-    needsTranscode: false,
-    bitrate: 0,
-    cacheKey: '',
-    qualityLabel: null
-  };
+  return { needsTranscode: false, bitrate: 0, cacheKey: '', qualityLabel: null };
 }
 
 // 获取带品质标识的转码缓存路径
-function getQualityTranscodeCachePath(sourcePath: string, cacheKey: string): string {
+function getQualityTranscodeCachePath(sourcePath: string, cacheKey: string, ext: string = '.mp3'): string {
   const hash = crypto.createHash('md5').update(`${cacheKey}:${sourcePath}`).digest('hex');
-  return path.join(os.homedir(), '.moonplayer', 'transcode_cache', `${hash}.mp3`);
+  return path.join(os.homedir(), '.moonplayer', 'transcode_cache', `${hash}${ext}`);
 }
 
 // 获取音频文件比特率
@@ -429,6 +436,49 @@ async function getAudioBitrate(filePath: string): Promise<number> {
     });
     
     ffprobe.on('error', () => resolve(999999));
+  });
+}
+
+// 获取音频编码格式
+async function getAudioCodec(filePath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const ffprobe = spawn(getFfprobePath(), [
+      '-v', 'quiet',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ]);
+    
+    let output = '';
+    ffprobe.stdout.on('data', (data) => { output += data.toString(); });
+    
+    ffprobe.on('close', () => {
+      resolve(output.trim() || null);
+    });
+    ffprobe.on('error', () => resolve(null));
+  });
+}
+
+// 获取音频声道数
+async function getAudioChannels(filePath: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const ffprobe = spawn(getFfprobePath(), [
+      '-v', 'quiet',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=channels',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ]);
+    
+    let output = '';
+    ffprobe.stdout.on('data', (data) => { output += data.toString(); });
+    
+    ffprobe.on('close', () => {
+      const channels = parseInt(output.trim(), 10);
+      resolve(isNaN(channels) ? null : channels);
+    });
+    ffprobe.on('error', () => resolve(null));
   });
 }
 
@@ -465,11 +515,35 @@ function transcodeWithBitrate(filePath: string, outputPath: string, bitrate: num
   });
 }
 
+// DTS/AC3 转码为 FLAC（保留多声道，可选压缩级别）
+function transcodeDtsToFlac(filePath: string, outputPath: string, compressionLevel: number = 5): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-i', filePath,
+      '-c:a', 'flac',
+      '-compression_level', String(compressionLevel),
+      '-y',
+      outputPath
+    ];
+    
+    const ffmpeg = spawn(getFfmpegPath(), args);
+    
+    let stderr = '';
+    ffmpeg.stderr.on('data', (data) => { stderr += data.toString(); });
+    
+    ffmpeg.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`FLAC 转码失败 (code ${code}): ${stderr.slice(-500)}`));
+    });
+    ffmpeg.on('error', (err) => reject(err));
+  });
+}
+
 function getMimeType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   const mimeTypes: Record<string, string> = {
-    '.mp3': 'audio/mpeg',
     '.flac': 'audio/flac',
+    '.mp3': 'audio/mpeg',
     '.wav': 'audio/wav',
     '.ogg': 'audio/ogg',
     '.m4a': 'audio/mp4',
@@ -480,16 +554,60 @@ function getMimeType(filePath: string): string {
   return mimeTypes[ext] || 'audio/mpeg';
 }
 
-// 获取本地文件时长
-async function getLocalFileDuration(filePath: string): Promise<number | null> {
+// 获取本地文件时长和元数据
+async function getLocalFileMetadata(filePath: string): Promise<{ duration: number | null; artist: string | null; album: string | null }> {
+  let duration: number | null = null;
+  let artist: string | null = null;
+  let album: string | null = null;
+  
   try {
     const metadata = await parseFile(filePath);
-    if (metadata.format.duration) {
-      return metadata.format.duration;
-    }
+    duration = metadata.format.duration || null;
+    artist = metadata.common.artist || null;
+    album = metadata.common.album || null;
   } catch {}
   
-  return await getDurationViaFfprobe(filePath);
+  if (!duration || !artist || !album) {
+    const ffprobeMeta = await getMetadataViaFfprobe(filePath);
+    duration = duration || ffprobeMeta.duration;
+    artist = artist || ffprobeMeta.artist;
+    album = album || ffprobeMeta.album;
+  }
+  
+  return { duration, artist, album };
+}
+
+// 使用 ffprobe 获取元数据
+async function getMetadataViaFfprobe(filePath: string): Promise<{ duration: number | null; artist: string | null; album: string | null }> {
+  return new Promise((resolve) => {
+    const ffprobe = spawn(getFfprobePath(), [
+      '-v', 'quiet',
+      '-show_entries', 'format=duration',
+      '-show_entries', 'format_tags=artist,album',
+      '-of', 'json',
+      filePath
+    ]);
+    
+    let output = '';
+    ffprobe.stdout.on('data', (data) => { output += data.toString(); });
+    ffprobe.on('close', () => {
+      try {
+        const json = JSON.parse(output);
+        const format = json.format || {};
+        const tags = format.tags || {};
+        resolve({
+          duration: parseFloat(format.duration) || null,
+          artist: tags.artist || tags.ARTIST || null,
+          album: tags.album || tags.ALBUM || null
+        });
+      } catch {
+        resolve({ duration: null, artist: null, album: null });
+      }
+    });
+    ffprobe.on('error', () => {
+      resolve({ duration: null, artist: null, album: null });
+    });
+  });
 }
 
 // 使用 ffprobe 获取时长
@@ -522,18 +640,20 @@ async function getDurationViaFfprobe(filePath: string): Promise<number | null> {
   });
 }
 
-// 获取 WebDAV 文件时长
-async function getWebdavFileDuration(configId: number, filePath: string): Promise<number | null> {
+// 获取 WebDAV 文件时长和元数据
+async function getWebdavFileMetadata(configId: number, filePath: string): Promise<{ duration: number | null; artist: string | null; album: string | null }> {
+  let duration: number | null = null;
+  let artist: string | null = null;
+  let album: string | null = null;
+  
   try {
     const config = getWebdavConfig(configId);
-    if (!config) return null;
+    if (!config) return { duration: null, artist: null, album: null };
     
     const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
     
     const stat = await client.stat(filePath) as any;
-    if (stat?.duration) {
-      return stat.duration;
-    }
+    duration = stat?.duration || null;
     
     const size = stat?.size || 0;
     const chunkSize = Math.min(512 * 1024, size);
@@ -545,14 +665,15 @@ async function getWebdavFileDuration(configId: number, filePath: string): Promis
     
     const { parseBuffer } = await import('music-metadata');
     const metadata = await parseBuffer(buffer as Buffer, { mimeType: getMimeType(filePath) });
-    if (metadata.format.duration) {
-      return metadata.format.duration;
-    }
+    duration = metadata.format.duration || duration;
+    artist = metadata.common.artist || null;
+    album = metadata.common.album || null;
     
-    return await getWebdavDurationViaDownload(configId, filePath);
+    const fallbackDuration = await getWebdavDurationViaDownload(configId, filePath);
+    return { duration: fallbackDuration, artist, album };
   } catch (err) {
-    console.error('获取 WebDAV 文件时长失败:', err);
-    return null;
+    console.error('获取 WebDAV 文件元数据失败:', err);
+    return { duration: null, artist: null, album: null };
   }
 }
 

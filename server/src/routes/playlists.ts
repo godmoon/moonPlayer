@@ -1,7 +1,6 @@
 // 播放列表路由
 import type { FastifyInstance } from 'fastify';
 import { getDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
-import { parseFile } from 'music-metadata';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -202,8 +201,7 @@ export async function performScan(playlistId: number, db: any, app: FastifyInsta
 
   // 插入或更新音轨
   const insertTrack = db.prepare('INSERT OR IGNORE INTO tracks (path, title, date_added) VALUES (?, ?, ?)');
-  const getTrack = db.prepare('SELECT id, duration, artist, album FROM tracks WHERE path = ?') as any;
-  const updateTrack = db.prepare('UPDATE tracks SET title = ?, artist = ?, album = ?, duration = ? WHERE id = ?');
+  const getTrack = db.prepare('SELECT id FROM tracks WHERE path = ?') as any;
   const trackIds: number[] = [];
   const seenTrackIds = new Set<number>();
 
@@ -218,20 +216,8 @@ export async function performScan(playlistId: number, db: any, app: FastifyInsta
     }
     
     insertTrack.run(trackPath, title, Date.now());
-    const track = getTrack.get(trackPath) as { id: number; duration: number | null; artist: string | null; album: string | null } | undefined;
+    const track = getTrack.get(trackPath) as { id: number } | undefined;
     if (track) {
-      if (track.duration === null && !webdavMatch) {
-        try {
-          const metadata = await parseFile(trackPath);
-          const metaTitle = metadata.common.title || title;
-          const artist = metadata.common.artist || null;
-          const album = metadata.common.album || null;
-          const duration = metadata.format.duration || null;
-          updateTrack.run(metaTitle, artist, album, duration, track.id);
-        } catch {
-          // 解析失败，保持原样
-        }
-      }
       const trackId = track.id;
       if (!seenTrackIds.has(trackId)) {
         seenTrackIds.add(trackId);

@@ -1,6 +1,6 @@
 // 回收站组件
 import { useState, useEffect, useCallback } from 'react';
-import { getRecycledTracks, restoreTrack, permanentDeleteTrack } from '../stores/api';
+import { getRecycledTracks, restoreTrack, permanentDeleteTrack, clearRecycledTracks } from '../stores/api';
 import { formatTrackTitle } from '../utils/format';
 
 export function RecycleBin() {
@@ -8,6 +8,7 @@ export function RecycleBin() {
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [restoring, setRestoring] = useState<number | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const loadRecycledTracks = useCallback(async () => {
     setLoading(true);
@@ -58,6 +59,29 @@ export function RecycleBin() {
     }
   };
 
+  const handleClearAll = async () => {
+    if (!confirm(`确定永久删除回收站中全部 ${tracks.length} 个文件吗？此操作不可恢复！`)) return;
+
+    setClearing(true);
+    try {
+      const result = await clearRecycledTracks();
+      if (result.success) {
+        setTracks([]);
+        if (result.errorCount > 0) {
+          alert(`已删除 ${result.deletedCount} 个文件，${result.errorCount} 个文件删除失败`);
+        }
+      } else {
+        alert(result.error || '清空失败');
+      }
+    } catch (err: any) {
+      console.error('清空回收站失败:', err);
+      const errorMsg = err.response?.data?.error || err.message || '清空失败';
+      alert(errorMsg);
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const formatDate = (timestamp: number) => {
     if (!timestamp) return '';
     const date = new Date(timestamp);
@@ -71,7 +95,18 @@ export function RecycleBin() {
           <h2 className="font-medium">🗑️ 回收站</h2>
           <div className="text-xs text-gray-500">{tracks.length} 个文件</div>
         </div>
-        <button onClick={loadRecycledTracks} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">刷新</button>
+        <div className="flex items-center gap-2">
+          {tracks.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              disabled={clearing}
+              className="px-3 py-1 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded text-sm"
+            >
+              {clearing ? '清空中...' : '清空'}
+            </button>
+          )}
+          <button onClick={loadRecycledTracks} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">刷新</button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto p-2">
