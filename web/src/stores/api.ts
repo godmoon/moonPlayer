@@ -424,6 +424,34 @@ export async function importTags(tags: TagImport[]): Promise<{ updated: number }
   return res.data;
 }
 
+// ========== 管理员：用户管理 ==========
+
+export interface UserInfo {
+  id: number;
+  username: string;
+  role: 'admin' | 'user';
+  created_at: number;
+  updated_at: number;
+}
+
+export async function getUsers(): Promise<UserInfo[]> {
+  const res = await api.get('/admin/users');
+  return res.data.users;
+}
+
+export async function createUserByAdmin(username: string, password: string, role: 'admin' | 'user'): Promise<void> {
+  await api.post('/admin/users', { username, password, role });
+}
+
+export async function deleteUserByAdmin(id: number): Promise<void> {
+  await api.delete(`/admin/users/${id}`);
+}
+
+export async function getCurrentUser(): Promise<{ username: string; role: string; id: number }> {
+  const res = await api.get('/auth/me');
+  return res.data;
+}
+
 export async function getAllTags(): Promise<string[]> {
   const res = await api.get('/tracks/tags/list');
   return res.data.tags;

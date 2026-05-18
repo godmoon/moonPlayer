@@ -3,7 +3,7 @@
 // 用法: node dist/cli.js [command]
 // 命令: clear-admin - 清除管理员密码
 
-import { initDatabaseAsync, getDatabase, closeDatabase, clearAdminPassword } from './db/schema.js';
+import { initDatabaseAsync, getDatabase, closeDatabase } from './db/schema.js';
 
 async function clearAdmin() {
   // 初始化数据库
@@ -12,7 +12,7 @@ async function clearAdmin() {
 
   try {
     // 检查是否有管理员
-    const admin = db.prepare('SELECT id FROM admin WHERE id = 1').get();
+    const admin = db.prepare("SELECT id FROM users WHERE role = 'admin'").get();
 
     if (!admin) {
       console.log('No admin account set');
@@ -23,19 +23,17 @@ async function clearAdmin() {
     const playlistCount = db.prepare('SELECT COUNT(*) as count FROM playlists').get() as { count: number };
     const trackCount = db.prepare('SELECT COUNT(*) as count FROM tracks').get() as { count: number };
 
-    console.log('Warning: About to clear admin password');
+    console.log('Warning: About to clear all admin accounts');
     console.log(`   Playlists: ${playlistCount.count}`);
     console.log(`   Tracks: ${trackCount.count}`);
     console.log('   Note: Playlists and tracks will NOT be deleted');
 
     // 清除管理员
-    const result = clearAdminPassword();
-    if (result.success) {
-      console.log('Admin password cleared');
-      console.log('   You will need to set up admin again on next start');
-    } else {
-      console.log('Failed:', result.error);
-    }
+    db.prepare("DELETE FROM users WHERE role = 'admin'").run();
+    db.prepare('DELETE FROM sessions').run();
+    db.save();
+    console.log('All admin accounts cleared');
+    console.log('   You will need to set up admin again on next start');
 
   } finally {
     closeDatabase();

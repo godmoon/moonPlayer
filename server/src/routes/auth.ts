@@ -6,12 +6,14 @@ import {
   normalizePath,
   needsAdminSetup,
   setupAdmin,
-  verifyAdminPassword,
-  verifyAdminCredentials,
-  changeAdminPassword,
-  clearAdminPassword,
+  createUser,
+  listUsers,
+  deleteUser,
+  verifyUserCredentials,
+  changeUserPassword,
   createSession,
   validateSession,
+  getUserBySession,
   recordLoginAttempt,
   getLoginWaitTime
 } from '../db/schema.js';
@@ -66,7 +68,9 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
     }
 
     // 自动登录
-    const token = createSession();
+    const user = getDatabase().prepare("SELECT id FROM users WHERE role = 'admin'").get() as { id: number } | undefined;
+    const userId = user?.id || 1;
+    const token = createSession(userId);
 
     reply.setCookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -99,7 +103,7 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
     }
 
     // 验证用户名和密码
-    const result = verifyAdminCredentials(username, password);
+    const result = verifyUserCredentials(username, password);
     if (!result.success) {
       recordLoginAttempt(ip, false);
       const nextWaitTime = getLoginWaitTime(ip);
@@ -111,7 +115,7 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
 
     // 登录成功
     recordLoginAttempt(ip, true);
-    const token = createSession();
+    const token = createSession(result.userId!);
 
     reply.setCookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -144,15 +148,20 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
       return { authenticated: false };
     }
 
-    const valid = validateSession(token);
-    return { authenticated: valid };
+    const userId = validateSession(token);
+    return { authenticated: userId !== null };
   });
 
   // 修改密码（需要已登录）
   fastify.post<{ Body: ChangePasswordRequest }>('/api/auth/change-password', async (req, reply) => {
-    const token = req.cookies[COOKIE_NAME];
+    const token = req.cookies?.[COOKIE_NAME];
 
-    if (!token || !validateSession(token)) {
+    if (!token) {
+      return reply.code(401).send({ error: '未登录' });
+    }
+
+    const userId = validateSession(token);
+    if (!userId) {
       return reply.code(401).send({ error: '未登录' });
     }
 
@@ -166,7 +175,7 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
       return reply.code(400).send({ error: '新密码两次输入不一致' });
     }
 
-    const result = changeAdminPassword(oldPassword, newPassword);
+    const result = changeUserPassword(userId, oldPassword, newPassword);
 
     if (!result.success) {
       return reply.code(400).send({ error: result.error });
@@ -179,17 +188,81 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
   fastify.get('/api/auth/me', async (req, reply) => {
     const token = req.cookies[COOKIE_NAME];
 
-    if (!token || !validateSession(token)) {
+    if (!token) {
       return reply.code(401).send({ error: '未登录' });
     }
 
-    const admin = getDatabase().prepare('SELECT username FROM admin WHERE id = 1').get() as { username: string } | undefined;
-
-    if (!admin) {
+    const user = getUserBySession(token);
+    if (!user) {
       return reply.code(401).send({ error: '未登录' });
     }
 
-    return { username: admin.username };
+    return { username: user.username, role: user.role, id: user.id };
+  });
+
+  // ========== 管理员：用户管理 ==========
+
+  // 获取所有用户（仅管理员）
+  fastify.get('/api/admin/users', async (req, reply) => {
+    const token = req.cookies[COOKIE_NAME];
+    const currentUser = getUserBySession(token || '');
+    if (!currentUser || currentUser.role !== 'admin') {
+      return reply.code(403).send({ error: '仅管理员可执行此操作' });
+    }
+
+    const users = listUsers();
+    return { users };
+  });
+
+  // 创建用户（仅管理员）
+  fastify.post('/api/admin/users', async (req: any, reply) => {
+    const token = req.cookies[COOKIE_NAME];
+    const currentUser = getUserBySession(token || '');
+    if (!currentUser || currentUser.role !== 'admin') {
+      return reply.code(403).send({ error: '仅管理员可执行此操作' });
+    }
+
+    const { username, password, role } = req.body;
+
+    if (!username || !password) {
+      return reply.code(400).send({ error: '用户名和密码不能为空' });
+    }
+    if (role && !['admin', 'user'].includes(role)) {
+      return reply.code(400).send({ error: '角色无效' });
+    }
+
+    const result = createUser(username, password, role || 'user');
+    if (!result.success) {
+      return reply.code(400).send({ error: result.error });
+    }
+
+    return { success: true };
+  });
+
+  // 删除用户（仅管理员）
+  fastify.delete('/api/admin/users/:id', async (req: any, reply) => {
+    const token = req.cookies[COOKIE_NAME];
+    const currentUser = getUserBySession(token || '');
+    if (!currentUser || currentUser.role !== 'admin') {
+      return reply.code(403).send({ error: '仅管理员可执行此操作' });
+    }
+
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return reply.code(400).send({ error: '无效的用户 ID' });
+    }
+
+    // 不能删除自己
+    if (id === currentUser.id) {
+      return reply.code(400).send({ error: '不能删除当前登录的账户' });
+    }
+
+    const result = deleteUser(id);
+    if (!result.success) {
+      return reply.code(400).send({ error: result.error });
+    }
+
+    return { success: true };
   });
 
   done();
@@ -204,7 +277,8 @@ export function requireAuth(req: any, reply: any, done: (err?: Error) => void) {
     return;
   }
 
-  if (!validateSession(token)) {
+  const userId = validateSession(token);
+  if (!userId) {
     done(new Error('UNAUTHORIZED'));
     return;
   }

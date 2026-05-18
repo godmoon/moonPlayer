@@ -8,9 +8,10 @@ import { Settings } from './components/Settings';
 import { PlayerBar } from './components/AudioPlayer';
 import { Login } from './components/Login';
 import { Setup } from './components/Setup';
+import { AdminPanel } from './components/AdminPanel';
 import { SearchView } from './components/SearchView';
 import { RecycleBin } from './components/RecycleBin';
-import { getNavOrder } from './stores/api';
+import { getNavOrder, getCurrentUser } from './stores/api';
 import { detectFormatSupport, logFormatSupport } from './utils/formatSupport';
 import { setupNativeBridge } from './utils/nativeBridge';
 
@@ -23,6 +24,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab | null>(null);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
   const [contentView, setContentView] = useState<ContentView>('main');
+  const [userInfo, setUserInfo] = useState<{ username: string; role: string; id: number } | null>(null);
 
   // 检查登录状态
   useEffect(() => {
@@ -65,8 +67,17 @@ function App() {
 
       if (checkData.authenticated) {
         setAuthState('authenticated');
+        // 获取当前用户信息
+        let info: { username: string; role: string; id: number } | null = null;
+        try {
+          info = await getCurrentUser();
+          setUserInfo(info);
+        } catch {}
         // 加载导航顺序，设置第一个为默认 tab
         getNavOrder().then(order => {
+          if (order?.includes('admin') && info?.role !== 'admin') {
+            order = order.filter((t: string) => t !== 'admin');
+          }
           if (order && order.length > 0) {
             setActiveTab(order[0] as Tab);
           } else {
@@ -137,7 +148,7 @@ function App() {
       {/* 主内容区 */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* 侧边栏 */}
-        <Sidebar activeTab={activeTab} onTabChange={(tab) => {
+        <Sidebar activeTab={activeTab} userRole={userInfo?.role} onTabChange={(tab) => {
           setActiveTab(tab);
           setContentView('main');
         }} />
@@ -157,6 +168,8 @@ function App() {
             ) : (
               <UnifiedPlaylist onSelectPlaylist={handleSelectPlaylist} />
             )
+          ) : activeTab === 'admin' && userInfo?.role === 'admin' ? (
+            <AdminPanel />
           ) : activeTab === 'search' ? (
             <SearchView />
           ) : activeTab === 'settings' ? (

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getNavOrder, setNavOrder } from '../stores/api';
 
-type Tab = 'browse' | 'playlists' | 'settings' | 'search';
+type Tab = 'browse' | 'playlists' | 'settings' | 'search' | 'admin';
 
 const DEFAULT_TABS: { id: Tab; icon: string; label: string }[] = [
   { id: 'browse', icon: '📁', label: '浏览' },
@@ -11,9 +11,12 @@ const DEFAULT_TABS: { id: Tab; icon: string; label: string }[] = [
   { id: 'settings', icon: '⚙️', label: '设置' }
 ];
 
-export function Sidebar({ activeTab, onTabChange }: {
+const ADMIN_TAB = { id: 'admin' as Tab, icon: '👥', label: '管理' };
+
+export function Sidebar({ activeTab, onTabChange, userRole }: {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
+  userRole?: string;
 }) {
   // 移动端默认收起，桌面端默认展开
   const [collapsed, setCollapsed] = useState(() => {
@@ -38,15 +41,30 @@ export function Sidebar({ activeTab, onTabChange }: {
   // 加载导航顺序
   useEffect(() => {
     getNavOrder().then(order => {
+      const allTabs = [...DEFAULT_TABS];
       if (order && order.length > 0) {
-        const sortedTabs = order.map(id => DEFAULT_TABS.find(t => t.id === id)!).filter(Boolean);
+        const sortedTabs = order.map(id => allTabs.find(t => t.id === id)!).filter(Boolean);
+        if (userRole === 'admin') {
+          sortedTabs.push(ADMIN_TAB);
+        }
         setNavTabs(sortedTabs);
+      } else {
+        const defaultTabs = [...DEFAULT_TABS];
+        if (userRole === 'admin') {
+          defaultTabs.push(ADMIN_TAB);
+        }
+        setNavTabs(defaultTabs);
       }
       setLoaded(true);
     }).catch(() => {
+      const defaultTabs = [...DEFAULT_TABS];
+      if (userRole === 'admin') {
+        defaultTabs.push(ADMIN_TAB);
+      }
+      setNavTabs(defaultTabs);
       setLoaded(true);
     });
-  }, []);
+  }, [userRole]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -121,8 +139,8 @@ export function Sidebar({ activeTab, onTabChange }: {
     newTabs.splice(dropIndex, 0, draggedTab);
     setNavTabs(newTabs);
 
-    // 保存到后端
-    const order = newTabs.map(t => t.id);
+    // 保存到后端（排除管理标签，它总是动态追加的）
+    const order = newTabs.map(t => t.id).filter(id => id !== 'admin');
     try {
       await setNavOrder(order);
     } catch (err) {
@@ -180,7 +198,7 @@ export function Sidebar({ activeTab, onTabChange }: {
             navTabs.map((tab, index) => (
               <div
                 key={tab.id}
-                draggable
+                draggable={tab.id !== 'admin'}
                 onDragStart={(e) => handleDragStart(e, index)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleDragOver(e, index)}

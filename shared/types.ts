@@ -87,6 +87,16 @@ export interface FileNode {
   children?: FileNode[];
 }
 
+// ============ 用户 ============
+
+export interface User {
+  id: number;
+  username: string;
+  role: 'admin' | 'user';
+  createdAt: number;
+  updatedAt: number;
+}
+
 // ============ 播放状态 ============
 
 export interface PlayerState {

@@ -140,7 +140,8 @@ async function start() {
     }
 
     // 验证会话
-    if (!validateSession(token)) {
+    const userId = validateSession(token);
+    if (!userId) {
       reply.clearCookie('moonplayer_session', { path: '/' });
       if (req.url.startsWith('/api/')) {
         return reply.code(401).send({ error: 'UNAUTHORIZED' });

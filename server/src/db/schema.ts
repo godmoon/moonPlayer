@@ -303,7 +303,20 @@ function initTables(db: Database) {
     )
   `);
 
-  // 管理员表
+  // 用户表（多账户支持）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      password_salt TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin', 'user')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+
+  // 保留旧管理员表（用于迁移兼容）
   db.exec(`
     CREATE TABLE IF NOT EXISTS admin (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -465,6 +478,29 @@ function migrateDatabase(db: Database) {
   }
 
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tracks_recycled ON tracks(recycled)`);
+
+  // 迁移：从 admin 表复制数据到 users 表
+  const adminTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='admin'").get();
+  if (adminTableExists) {
+    const adminCount = db.prepare('SELECT COUNT(*) as count FROM admin').get() as { count: number };
+    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+    if (adminCount.count > 0 && userCount.count === 0) {
+      const admin = db.prepare('SELECT * FROM admin WHERE id = 1').get() as any;
+      if (admin) {
+        db.prepare('INSERT INTO users (id, username, password_hash, password_salt, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+          1, admin.username, admin.password_hash, admin.password_salt, 'admin', admin.created_at || Date.now(), admin.updated_at || Date.now()
+        );
+      }
+    }
+  }
+
+  // 迁移：给 sessions 表添加 user_id
+  const sessionsInfo = db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
+  const sessionsColumns = sessionsInfo.map(c => c.name);
+  if (!sessionsColumns.includes('user_id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN user_id INTEGER REFERENCES users(id)');
+    db.exec("UPDATE sessions SET user_id = 1 WHERE user_id IS NULL");
+  }
 }
 
 // 密码哈希工具
@@ -479,18 +515,20 @@ export function verifyPassword(password: string, hash: string, salt: string): bo
   return result.hash === hash;
 }
 
+// ========== 用户管理函数 ==========
+
 // 检查是否需要初始化管理员
 export function needsAdminSetup(): boolean {
   const database = getDatabase();
-  const admin = database.prepare('SELECT id FROM admin WHERE id = 1').get();
+  const admin = database.prepare("SELECT id FROM users WHERE role = 'admin'").get();
   return !admin;
 }
 
-// 初始化管理员
+// 初始化第一个管理员
 export function setupAdmin(username: string, password: string): { success: boolean; error?: string } {
   const database = getDatabase();
   
-  const existing = database.prepare('SELECT id FROM admin WHERE id = 1').get();
+  const existing = database.prepare("SELECT id FROM users WHERE role = 'admin'").get();
   if (existing) {
     return { success: false, error: '管理员已存在' };
   }
@@ -503,51 +541,99 @@ export function setupAdmin(username: string, password: string): { success: boole
   const now = Date.now();
   
   database.prepare(`
-    INSERT INTO admin (id, username, password_hash, password_salt, created_at, updated_at)
-    VALUES (1, ?, ?, ?, ?, ?)
+    INSERT INTO users (username, password_hash, password_salt, role, created_at, updated_at)
+    VALUES (?, ?, ?, 'admin', ?, ?)
   `).run(username, hash, salt, now, now);
   
-  // 保存数据库
   database.save();
   
   return { success: true };
 }
 
-// 验证管理员密码
-export function verifyAdminPassword(password: string): boolean {
+// 创建用户（管理员用）
+export function createUser(username: string, password: string, role: 'admin' | 'user'): { success: boolean; error?: string } {
   const database = getDatabase();
-  const admin = database.prepare('SELECT password_hash, password_salt FROM admin WHERE id = 1').get() as { password_hash: string; password_salt: string } | undefined;
   
-  if (!admin) return false;
-  
-  return verifyPassword(password, admin.password_hash, admin.password_salt);
-}
-
-// 验证管理员凭据
-export function verifyAdminCredentials(username: string, password: string): { success: boolean; error?: string } {
-  const database = getDatabase();
-  const admin = database.prepare('SELECT username, password_hash, password_salt FROM admin WHERE id = 1').get() as { username: string; password_hash: string; password_salt: string } | undefined;
-  
-  if (!admin) {
-    return { success: false, error: '用户名或密码错误' };
+  if (password.length < 6) {
+    return { success: false, error: '密码至少需要6个字符' };
   }
   
-  if (admin.username !== username) {
-    return { success: false, error: '用户名或密码错误' };
+  const existing = database.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  if (existing) {
+    return { success: false, error: '用户名已存在' };
   }
   
-  if (!verifyPassword(password, admin.password_hash, admin.password_salt)) {
-    return { success: false, error: '用户名或密码错误' };
-  }
+  const { hash, salt } = hashPassword(password);
+  const now = Date.now();
+  
+  database.prepare(`
+    INSERT INTO users (username, password_hash, password_salt, role, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(username, hash, salt, role, now, now);
+  
+  database.save();
   
   return { success: true };
 }
 
-// 修改密码
-export function changeAdminPassword(oldPassword: string, newPassword: string): { success: boolean; error?: string } {
+// 获取所有用户
+export function listUsers(): any[] {
+  const database = getDatabase();
+  return database.prepare('SELECT id, username, role, created_at, updated_at FROM users ORDER BY id').all();
+}
+
+// 删除用户
+export function deleteUser(id: number): { success: boolean; error?: string } {
   const database = getDatabase();
   
-  if (!verifyAdminPassword(oldPassword)) {
+  const user = database.prepare('SELECT id FROM users WHERE id = ?').get(id) as any;
+  if (!user) {
+    return { success: false, error: '用户不存在' };
+  }
+  
+  // 不允许删除最后一个管理员
+  const adminCount = database.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as { count: number };
+  const targetUser = database.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: string };
+  if (adminCount.count <= 1 && targetUser.role === 'admin') {
+    return { success: false, error: '至少保留一个管理员账户' };
+  }
+  
+  database.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+  database.prepare('DELETE FROM users WHERE id = ?').run(id);
+  database.save();
+  
+  return { success: true };
+}
+
+// 验证用户凭据
+export function verifyUserCredentials(username: string, password: string): { success: boolean; error?: string; userId?: number; role?: string } {
+  const database = getDatabase();
+  const user = database.prepare('SELECT id, username, password_hash, password_salt, role FROM users WHERE username = ?').get(username) as any;
+  
+  if (!user) {
+    return { success: false, error: '用户名或密码错误' };
+  }
+  
+  if (!verifyPassword(password, user.password_hash, user.password_salt)) {
+    return { success: false, error: '用户名或密码错误' };
+  }
+  
+  return { success: true, userId: user.id, role: user.role };
+}
+
+// 验证用户密码（用于改密码）
+export function verifyUserPassword(userId: number, password: string): boolean {
+  const database = getDatabase();
+  const user = database.prepare('SELECT password_hash, password_salt FROM users WHERE id = ?').get(userId) as any;
+  if (!user) return false;
+  return verifyPassword(password, user.password_hash, user.password_salt);
+}
+
+// 修改用户密码
+export function changeUserPassword(userId: number, oldPassword: string, newPassword: string): { success: boolean; error?: string } {
+  const database = getDatabase();
+  
+  if (!verifyUserPassword(userId, oldPassword)) {
     return { success: false, error: '原密码错误' };
   }
   
@@ -559,55 +645,64 @@ export function changeAdminPassword(oldPassword: string, newPassword: string): {
   const now = Date.now();
   
   database.prepare(`
-    UPDATE admin SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = 1
-  `).run(hash, salt, now);
+    UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?
+  `).run(hash, salt, now, userId);
   
   database.save();
   
   return { success: true };
 }
 
-// 清除管理员密码
-export function clearAdminPassword(): { success: boolean; error?: string } {
+// 清除所有管理员
+export function clearAllAdmins(): { success: boolean; error?: string } {
   const database = getDatabase();
   
-  database.prepare('DELETE FROM admin WHERE id = 1').run();
+  database.prepare("DELETE FROM users WHERE role = 'admin'").run();
   database.prepare('DELETE FROM sessions').run();
-  
   database.save();
   
   return { success: true };
 }
 
-// 创建会话
-export function createSession(): string {
+// 创建会话（带 user_id）
+export function createSession(userId: number): string {
   const database = getDatabase();
   const token = crypto.randomBytes(64).toString('hex');
   const now = Date.now();
   const expiresAt = now + 365 * 24 * 60 * 60 * 1000;
   
-  database.prepare('INSERT INTO sessions (token, created_at, expires_at) VALUES (?, ?, ?)').run(token, now, expiresAt);
+  database.prepare('INSERT INTO sessions (token, created_at, expires_at, user_id) VALUES (?, ?, ?, ?)').run(token, now, expiresAt, userId);
   
   database.save();
   
   return token;
 }
 
-// 验证会话
-export function validateSession(token: string): boolean {
+// 验证会话并返回 user_id
+export function validateSession(token: string): number | null {
   const database = getDatabase();
   const now = Date.now();
   
-  const session = database.prepare('SELECT id, expires_at FROM sessions WHERE token = ?').get(token) as { id: number; expires_at: number } | undefined;
+  const session = database.prepare('SELECT id, expires_at, user_id FROM sessions WHERE token = ?').get(token) as { id: number; expires_at: number; user_id: number } | undefined;
   
-  if (!session) return false;
+  if (!session) return null;
   if (session.expires_at < now) {
     database.prepare('DELETE FROM sessions WHERE id = ?').run(session.id);
     database.save();
-    return false;
+    return null;
   }
   
-  return true;
+  return session.user_id;
+}
+
+// 通过会话获取用户信息
+export function getUserBySession(token: string): { id: number; username: string; role: string } | null {
+  const database = getDatabase();
+  const userId = validateSession(token);
+  if (!userId) return null;
+  
+  const user = database.prepare('SELECT id, username, role FROM users WHERE id = ?').get(userId) as any;
+  return user || null;
 }
 
 // 清理过期会话
