@@ -1,6 +1,6 @@
 // 音轨路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
 import { parseFile, parseBuffer } from 'music-metadata';
 import { createClient } from 'webdav';
 import fs from 'fs';
@@ -56,10 +56,9 @@ function getDirnameForImport(): string {
 const __dirname = getDirnameForImport();
 
 export async function trackRoutes(app: FastifyInstance) {
-  const db = getDatabase();
-
   // 扫描文件并添加到数据库
   app.post('/api/tracks/scan', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { paths } = req.body as { paths: string[] };
 
     if (!paths || paths.length === 0) {
@@ -124,6 +123,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取音轨信息
   app.get('/api/tracks/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id));
@@ -136,6 +136,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 更新评分
   app.put('/api/tracks/:id/rating', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { delta } = req.body as { delta: number };
 
@@ -147,6 +148,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 记录播放
   app.post('/api/tracks/:id/play', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { completed, position } = req.body as { completed: boolean; position?: number };
 
@@ -156,7 +158,7 @@ export async function trackRoutes(app: FastifyInstance) {
     }
 
     // 尝试从文件读取元数据（如果数据库中缺少这些信息）
-    await enrichTrackMetadata(track);
+    await enrichTrackMetadata(track, db);
 
     const duration = track.duration || 0;
     const rating = track.rating;
@@ -200,6 +202,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取所有音轨（搜索为空时使用，限制100条）
   app.get('/api/tracks/all', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const tracks = db.prepare(`
       SELECT * FROM tracks 
       WHERE recycled = 0
@@ -212,6 +215,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 按筛选条件获取音轨（服务端筛选）
   app.post('/api/tracks/filter-by-conditions', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { conditions } = req.body as { 
       conditions: Array<{ match_field: string; match_op: string; match_value: string }> 
     };
@@ -287,6 +291,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 搜索音轨
   app.get('/api/tracks/search', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { q } = req.query as { q?: string };
 
     if (!q) {
@@ -379,6 +384,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取高分音轨（用于权重随机）
   app.get('/api/tracks/top-rated', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { limit = 100 } = req.query as { limit?: number };
 
     const tracks = db.prepare(`
@@ -393,6 +399,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 批量评分
   app.post('/api/tracks/batch-rating', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { trackIds, rating } = req.body as { trackIds: number[]; rating: number };
 
     if (!trackIds || trackIds.length === 0) {
@@ -409,12 +416,14 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 重置所有评分
   app.post('/api/tracks/reset-rating', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     db.prepare('UPDATE tracks SET rating = 0').run();
     return { success: true };
   });
 
   // 按 TAG 筛选音轨
   app.get('/api/tracks/filter', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { artist, album, title, minRating, maxRating } = req.query as {
       artist?: string;
       album?: string;
@@ -455,6 +464,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 删除音轨（标记为回收站）
   app.delete('/api/tracks/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
@@ -470,6 +480,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 从所有播放列表中移除该音轨（回收站文件不参与播放）
   app.delete('/api/tracks/:id/remove-from-playlists', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     db.prepare('DELETE FROM playlist_tracks WHERE track_id = ?').run(Number(id));
@@ -481,6 +492,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取回收站音轨列表
   app.get('/api/tracks/recycled', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const tracks = db.prepare(`
       SELECT * FROM tracks
       WHERE recycled = 1
@@ -492,6 +504,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 恢复回收站音轨
   app.post('/api/tracks/:id/restore', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
@@ -506,6 +519,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 清空回收站（删除所有回收站音轨的物理文件）
   app.delete('/api/tracks/recycled/clear', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const recycledTracks = db.prepare(`
       SELECT * FROM tracks WHERE recycled = 1
     `).all() as any[];
@@ -522,7 +536,7 @@ export async function trackRoutes(app: FastifyInstance) {
         if (filePath.startsWith('webdav://')) {
           const parsed = parseWebdavPath(filePath);
           if (parsed) {
-            const config = getWebdavConfig(parsed.configId);
+            const config = getWebdavConfig(parsed.configId, (req as any).userId);
             if (config) {
               const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
               await client.deleteFile(parsed.webdavPath);
@@ -573,6 +587,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 彻底删除音轨（删除物理文件）
   app.delete('/api/tracks/:id/permanent', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id)) as any;
@@ -587,7 +602,7 @@ export async function trackRoutes(app: FastifyInstance) {
     if (filePath.startsWith('webdav://')) {
       const parsed = parseWebdavPath(filePath);
       if (parsed) {
-        const config = getWebdavConfig(parsed.configId);
+        const config = getWebdavConfig(parsed.configId, (req as any).userId);
         if (config) {
           try {
             const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
@@ -635,6 +650,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取低分音轨列表（用于清理）
   app.get('/api/tracks/low-rated', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { threshold = -5, limit = 100 } = req.query as { threshold?: string; limit?: string };
 
     const tracks = db.prepare(`
@@ -653,6 +669,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取所有歌曲数据（用于导出给AI）
   app.get('/api/tracks/cache', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const tracks = db.prepare(`
       SELECT 
         id,
@@ -679,6 +696,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 刷新元数据（扫描所有音乐路径）
   app.post('/api/tracks/cache/refresh', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     // 获取音乐路径配置
     const setting = db.prepare("SELECT value FROM settings WHERE key = 'music_paths'").get() as { value: string } | undefined;
     if (!setting) {
@@ -834,6 +852,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取未标注标签的歌曲数量
   app.get('/api/tracks/untagged-count', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const result = db.prepare(`
       SELECT COUNT(*) as count FROM tracks 
       WHERE tags IS NULL OR tags = '' OR tags = '[]'
@@ -843,6 +862,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取未标注标签的歌曲列表（分批，每批 limit 个）
   app.get('/api/tracks/untagged', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { limit = 500, offset = 0 } = req.query as { limit?: string; offset?: string };
     
     const tracks = db.prepare(`
@@ -864,6 +884,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 导入标签数据
   app.post('/api/tracks/tags/import', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { tags } = req.body as { tags: Array<{ id: number; tags: string[] }> };
 
     if (!tags || !Array.isArray(tags)) {
@@ -888,6 +909,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取播放次数统计
   app.get('/api/tracks/play-stats', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { limit = 100, offset = 0, orderBy = 'play_count', order = 'DESC' } = req.query as {
       limit?: string;
       offset?: string;
@@ -932,6 +954,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取播放次数最多的歌曲
   app.get('/api/tracks/most-played', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { limit = 50 } = req.query as { limit?: string };
 
     const tracks = db.prepare(`
@@ -955,6 +978,7 @@ export async function trackRoutes(app: FastifyInstance) {
 
   // 获取所有已存在的标签列表
   app.get('/api/tracks/tags/list', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const rows = db.prepare('SELECT DISTINCT tags FROM tracks WHERE tags IS NOT NULL AND tags != \'[]\'').all() as { tags: string }[];
     
     const tagSet = new Set<string>();
@@ -977,7 +1001,7 @@ export async function trackRoutes(app: FastifyInstance) {
 }
 
 // 从文件读取并更新元数据（如果数据库中缺少这些信息）
-async function enrichTrackMetadata(track: any) {
+async function enrichTrackMetadata(track: any, db: any) {
   const filePath = track.path;
   
   // 检查是否需要更新元数据
@@ -1083,12 +1107,11 @@ async function enrichTrackMetadata(track: any) {
     
     // 执行更新
     if (updates.length > 0) {
-      const database = getDatabase();
       const setClause = updates.map(u => `${u.field} = ?`).join(', ');
       const values = updates.map(u => u.value);
       values.push(track.id);
       
-      database.prepare(`UPDATE tracks SET ${setClause} WHERE id = ?`).run(...values);
+      db.prepare(`UPDATE tracks SET ${setClause} WHERE id = ?`).run(...values);
     }
   } catch (err) {
     // 元数据读取失败，静默忽略

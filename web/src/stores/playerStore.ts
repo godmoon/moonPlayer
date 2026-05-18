@@ -49,6 +49,8 @@ interface Playlist {
   skipIntro?: number;
   skipOutro?: number;
   qualityMode?: string;
+  playbackSpeed?: number;
+  trackSort?: string;
 }
 
 interface PlayerState {

@@ -37,6 +37,8 @@ export interface Playlist {
   updatedAt: number;
   isAuto: boolean;           // 是否自动创建
   qualityMode?: string;      // 品质设置（可选，未设置则使用全局配置）
+  playbackSpeed?: number;    // 播放速度，默认 1.0
+  trackSort?: string;        // 音轨排序方式（name/number/random/rating）
 }
 
 export interface PlaylistWithItems extends Playlist {

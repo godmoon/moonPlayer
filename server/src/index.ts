@@ -15,7 +15,7 @@ import { skipRoutes } from './routes/skip.js';
 import { webdavRoutes } from './routes/webdav.js';
 import { authRoutes, PUBLIC_PATHS } from './routes/auth.js';
 import { settingsRoutes } from './routes/settings.js';
-import { initDatabaseAsync, closeDatabase, needsAdminSetup, validateSession, cleanExpiredSessions } from './db/schema.js';
+import { initDatabaseAsync, closeAllDatabases, needsAdminSetup, validateSession, cleanExpiredSessions } from './db/schema.js';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
@@ -152,6 +152,9 @@ async function start() {
       }
       return reply.code(401).send({ error: 'UNAUTHORIZED' });
     }
+
+    // 将 userId 附加到请求（供路由使用）
+    (req as any).userId = userId;
   });
 
   // 注册路由
@@ -196,14 +199,14 @@ async function start() {
   // 优雅关闭
   process.on('SIGINT', async () => {
     app.log.info('正在关闭服务器...');
-    closeDatabase();
+    closeAllDatabases();
     await app.close();
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
     app.log.info('正在关闭服务器...');
-    closeDatabase();
+    closeAllDatabases();
     await app.close();
     process.exit(0);
   });

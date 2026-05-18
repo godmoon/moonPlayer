@@ -83,8 +83,8 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
       if (existing.playlist) {
         playlist = existing.playlist;
         // 先刷新获取现有音轨列表
-        const refreshed = await refreshPlaylist(playlist.id);
-        let trackList = refreshed.tracks as Track[];
+        const refreshed = await refreshPlaylist(playlist.id, true);
+        let trackList = (refreshed.tracks || []) as Track[];
 
         const existingTrack = trackList.find((t: Track) => t.id === trackId);
         if (!existingTrack) {
@@ -118,10 +118,10 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
           { type: 'directory', path: currentPath, includeSubdirs: false }
         ], true);
 
-        const refreshed = await refreshPlaylist(playlist.id);
+        const refreshed = await refreshPlaylist(playlist.id, true);
         const trackList = refreshed.tracks as Track[];
 
-        if (trackList.length > 0) {
+        if (trackList && trackList.length > 0) {
           setCurrentPlaylist(createPlaylistObject(playlist), trackList);
           const targetTrack = trackList.find((t: Track) => t.id === trackId) || trackList[0];
           setCurrentTrack(targetTrack);
@@ -168,10 +168,10 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
       const existing = await findPlaylistForDir(dirPath);
       
       if (existing.playlist) {
-        const refreshed = await refreshPlaylist(existing.playlist.id);
+        const refreshed = await refreshPlaylist(existing.playlist.id, true);
         const trackList = refreshed.tracks as Track[];
         
-        if (trackList.length > 0) {
+        if (trackList && trackList.length > 0) {
           setCurrentPlaylist(createPlaylistObject(existing.playlist), trackList);
           setCurrentTrack(trackList[0]);
           setIsPlaying(true);
@@ -184,10 +184,10 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
         { type: 'directory', path: dirPath, includeSubdirs: true }
       ], true);
 
-      const refreshed = await refreshPlaylist(playlist.id);
+      const refreshed = await refreshPlaylist(playlist.id, true);
       const trackList = refreshed.tracks as Track[];
 
-      if (trackList.length > 0) {
+      if (trackList && trackList.length > 0) {
         setCurrentPlaylist(createPlaylistObject(playlist), trackList);
         setCurrentTrack(trackList[0]);
         setIsPlaying(true);

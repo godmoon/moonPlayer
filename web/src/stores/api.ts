@@ -49,12 +49,12 @@ export async function getPlaylist(id: number): Promise<any> {
   return res.data;
 }
 
-export async function createPlaylist(name: string, items: any[] = [], isAuto = false): Promise<any> {
-  const res = await api.post('/playlists', { name, items, isAuto });
+export async function createPlaylist(name: string, items: any[] = [], isAuto = false, playbackSpeed = 1.0): Promise<any> {
+  const res = await api.post('/playlists', { name, items, isAuto, playbackSpeed });
   return res.data;
 }
 
-export async function updatePlaylist(id: number, data: { name?: string; items?: any[]; playMode?: string; skipIntro?: number; skipOutro?: number; qualityMode?: string }): Promise<void> {
+export async function updatePlaylist(id: number, data: { name?: string; items?: any[]; playMode?: string; skipIntro?: number; skipOutro?: number; qualityMode?: string; playbackSpeed?: number; trackSort?: string }): Promise<void> {
   await api.put(`/playlists/${id}`, data);
 }
 

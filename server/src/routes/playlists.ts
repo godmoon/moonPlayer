@@ -1,6 +1,6 @@
 // 播放列表路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -249,10 +249,9 @@ export async function performScan(playlistId: number, db: any, app: FastifyInsta
 }
 
 export async function playlistRoutes(app: FastifyInstance) {
-  const db = getDatabase();
-
   // 获取所有播放列表（含最近播放信息）
-  app.get('/api/playlists', async () => {
+  app.get('/api/playlists', async (req) => {
+    const db = getUserDatabase((req as any).userId);
     const playlists = db.prepare(`
       SELECT p.*, COUNT(pi.id) as item_count
       FROM playlists p
@@ -299,6 +298,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 获取单个播放列表详情
   app.get('/api/playlists/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(Number(id));
@@ -321,7 +321,8 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 创建播放列表
   app.post('/api/playlists', async (req, reply) => {
-    const { name, items = [], isAuto = false, playMode = 'sequential' } = req.body as {
+    const db = getUserDatabase((req as any).userId);
+    const { name, items = [], isAuto = false, playMode = 'sequential', playbackSpeed = 1.0 } = req.body as {
       name: string;
       items?: Array<{
         type: 'directory' | 'file' | 'filter';
@@ -334,6 +335,7 @@ export async function playlistRoutes(app: FastifyInstance) {
       }>;
       isAuto?: boolean;
       playMode?: string;
+      playbackSpeed?: number;
     };
 
     if (!name || !name.trim()) {
@@ -342,8 +344,8 @@ export async function playlistRoutes(app: FastifyInstance) {
 
     const now = Date.now();
     const result = db.prepare(
-      'INSERT INTO playlists (name, created_at, updated_at, is_auto, play_mode) VALUES (?, ?, ?, ?, ?)'
-    ).run(name, now, now, isAuto ? 1 : 0, playMode);
+      'INSERT INTO playlists (name, created_at, updated_at, is_auto, play_mode, playback_speed) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(name, now, now, isAuto ? 1 : 0, playMode, playbackSpeed);
     const playlistId = result.lastInsertRowid;
 
     // 添加项目
@@ -373,14 +375,16 @@ export async function playlistRoutes(app: FastifyInstance) {
       updated_at: now,
       is_auto: isAuto ? 1 : 0,
       play_mode: playMode,
+      playback_speed: playbackSpeed,
       items
     };
   });
 
   // 更新播放列表
   app.put('/api/playlists/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
-    const { name, items, playMode, skipIntro, skipOutro, qualityMode } = req.body as {
+    const { name, items, playMode, skipIntro, skipOutro, qualityMode, playbackSpeed, trackSort } = req.body as {
       name?: string;
       items?: Array<{
         type: 'directory' | 'file' | 'filter';
@@ -395,6 +399,8 @@ export async function playlistRoutes(app: FastifyInstance) {
       skipIntro?: number;
       skipOutro?: number;
       qualityMode?: string;
+      playbackSpeed?: number;
+      trackSort?: string;
     };
 
     const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(Number(id));
@@ -405,7 +411,7 @@ export async function playlistRoutes(app: FastifyInstance) {
     const now = Date.now();
 
     // 更新基本信息
-    if (name !== undefined || playMode !== undefined || skipIntro !== undefined || skipOutro !== undefined || qualityMode !== undefined) {
+    if (name !== undefined || playMode !== undefined || skipIntro !== undefined || skipOutro !== undefined || qualityMode !== undefined || playbackSpeed !== undefined || trackSort !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
 
@@ -429,6 +435,14 @@ export async function playlistRoutes(app: FastifyInstance) {
         updates.push('quality_mode = ?');
         // 空字符串表示使用全局配置，存为 null
         values.push(qualityMode === '' ? null : qualityMode);
+      }
+      if (playbackSpeed !== undefined) {
+        updates.push('playback_speed = ?');
+        values.push(playbackSpeed);
+      }
+      if (trackSort !== undefined) {
+        updates.push('track_sort = ?');
+        values.push(trackSort);
       }
 
       updates.push('updated_at = ?');
@@ -465,6 +479,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 删除播放列表
   app.delete('/api/playlists/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     db.prepare('DELETE FROM playlists WHERE id = ?').run(Number(id));
@@ -473,6 +488,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 刷新播放列表（异步扫描）
   app.post('/api/playlists/:id/refresh', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { immediate = false } = req.body as { immediate?: boolean };
 
@@ -516,6 +532,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 获取扫描任务状态
   app.get('/api/scan/tasks/:taskId', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { taskId } = req.params as { taskId: string };
 
     const task = db.prepare('SELECT * FROM scan_tasks WHERE task_id = ?').get(taskId) as any;
@@ -528,6 +545,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 获取扫描结果（任务完成后）
   app.get('/api/scan/tasks/:taskId/result', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { taskId } = req.params as { taskId: string };
 
     const task = db.prepare('SELECT * FROM scan_tasks WHERE task_id = ?').get(taskId) as any;
@@ -553,6 +571,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 获取播放列表的音轨列表
   app.get('/api/playlists/:id/tracks', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(Number(id)) as any;
@@ -573,6 +592,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 添加项目到播放列表
   app.post('/api/playlists/:id/items', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { type, path: itemPath, includeSubdirs = false, filterRegex, filterArtist, filterAlbum, filterTitle, matchField, matchOp, matchValue } = req.body as {
       type: 'directory' | 'file' | 'filter' | 'match';
@@ -628,6 +648,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 更新播放列表项
   app.put('/api/playlists/:id/items/:itemId', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id, itemId } = req.params as { id: string; itemId: string };
     const { includeSubdirs, filterRegex, filterArtist, filterAlbum, filterTitle, matchField, matchOp, matchValue } = req.body as {
       includeSubdirs?: boolean;
@@ -691,6 +712,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 删除播放列表项
   app.delete('/api/playlists/:id/items/:itemId', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id, itemId } = req.params as { id: string; itemId: string };
 
     db.prepare('DELETE FROM playlist_items WHERE id = ? AND playlist_id = ?').run(Number(itemId), Number(id));
@@ -701,6 +723,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 添加音轨到播放列表（直接关联 track，不创建来源项）
   app.post('/api/playlists/:id/add-track', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { trackId } = req.body as { trackId: number };
 
@@ -728,6 +751,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 获取来源项的所有条件
   app.get('/api/playlists/:id/items/:itemId/conditions', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { itemId } = req.params as { itemId: string };
     const conditions = db.prepare('SELECT * FROM playlist_item_conditions WHERE item_id = ? ORDER BY "order"').all(Number(itemId));
     return { conditions };
@@ -735,6 +759,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 添加条件到来源项
   app.post('/api/playlists/:id/items/:itemId/conditions', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id, itemId } = req.params as { id: string; itemId: string };
     const { matchField, matchOp, matchValue } = req.body as {
       matchField: string;
@@ -768,6 +793,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 更新条件
   app.put('/api/playlists/:id/items/:itemId/conditions/:conditionId', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { conditionId } = req.params as { conditionId: string };
     const { matchField, matchOp, matchValue } = req.body as {
       matchField?: string;
@@ -801,6 +827,7 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 删除条件
   app.delete('/api/playlists/:id/items/:itemId/conditions/:conditionId', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { conditionId } = req.params as { conditionId: string };
 
     db.prepare('DELETE FROM playlist_item_conditions WHERE id = ?').run(Number(conditionId));
@@ -809,13 +836,15 @@ export async function playlistRoutes(app: FastifyInstance) {
   });
 
   // 获取"我喜欢的歌"播放列表 ID
-  app.get('/api/favorites-playlist', async () => {
+  app.get('/api/favorites-playlist', async (req) => {
+    const db = getUserDatabase((req as any).userId);
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('favorites_playlist_id') as { value: string } | undefined;
     return { playlistId: row ? Number(row.value) : null };
   });
 
   // 导入 AI 生成的播放列表
   app.post('/api/playlists/import-ai', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { playlists } = req.body as {
       playlists: Array<{
         name: string;
@@ -876,39 +905,52 @@ export async function playlistRoutes(app: FastifyInstance) {
 
   // 查找匹配目录的播放列表
   app.get('/api/find-playlist-for-dir', async (req) => {
+    const db = getUserDatabase((req as any).userId);
     const { dir } = req.query as { dir?: string };
     if (!dir) {
       return { playlist: null };
     }
 
-    // 查找所有播放列表项
+    const normalizedDir = path.resolve(dir).replace(/\/$/, '');
+
+    // 先通过索引快速查找匹配 type 和 path 的项
     const items = db.prepare(`
       SELECT pi.playlist_id, pi.path, pi.include_subdirs, p.name, p.play_mode, p.skip_intro, p.skip_outro
       FROM playlist_items pi
       JOIN playlists p ON pi.playlist_id = p.id
-      WHERE pi.type = 'directory'
-    `).all() as any[];
+      WHERE pi.type = 'directory' AND (pi.path = ? OR pi.path = ?)
+    `).all(normalizedDir, normalizedDir + '/') as any[];
+
+    // 兜底：路径可能存在差异（如相对路径），回退到 JS 标准化匹配
+    if (items.length === 0) {
+      const fallbackItems = db.prepare(`
+        SELECT pi.playlist_id, pi.path, pi.include_subdirs, p.name, p.play_mode, p.skip_intro, p.skip_outro
+        FROM playlist_items pi
+        JOIN playlists p ON pi.playlist_id = p.id
+        WHERE pi.type = 'directory'
+      `).all() as any[];
+
+      for (const item of fallbackItems) {
+        const normalizedItemPath = path.resolve(item.path).replace(/\/$/, '');
+        if (normalizedItemPath === normalizedDir) {
+          items.push(item);
+        }
+      }
+    }
 
     // 检查是否有匹配的播放列表（目录路径匹配，不限 include_subdirs）
     for (const item of items) {
-      const normalizedItemPath = path.resolve(item.path).replace(/\/$/, '');
-      const normalizedDir = path.resolve(dir).replace(/\/$/, '');
-      
-      // 检查路径是否匹配
-      if (normalizedItemPath === normalizedDir) {
-        // 检查这个播放列表是否只有这一个项
-        const itemCount = db.prepare('SELECT COUNT(*) as count FROM playlist_items WHERE playlist_id = ?').get(item.playlist_id) as { count: number };
-        if (itemCount.count === 1) {
-          return {
-            playlist: {
-              id: item.playlist_id,
-              name: item.name,
-              play_mode: item.play_mode,
-              skip_intro: item.skip_intro,
-              skip_outro: item.skip_outro
-            }
-          };
-        }
+      const itemCount = db.prepare('SELECT COUNT(*) as count FROM playlist_items WHERE playlist_id = ?').get(item.playlist_id) as { count: number };
+      if (itemCount.count === 1) {
+        return {
+          playlist: {
+            id: item.playlist_id,
+            name: item.name,
+            play_mode: item.play_mode,
+            skip_intro: item.skip_intro,
+            skip_outro: item.skip_outro
+          }
+        };
       }
     }
 

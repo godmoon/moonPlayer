@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { createClient } from 'webdav';
 import type { WebDAVClient } from 'webdav';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -43,16 +43,16 @@ function getWebdavClient(url: string, username?: string, password?: string): Web
 }
 
 export async function webdavRoutes(app: FastifyInstance) {
-  const db = getDatabase();
-
   // 获取所有 WebDAV 配置
-  app.get('/api/webdav', async () => {
+  app.get('/api/webdav', async (req) => {
+    const db = getUserDatabase((req as any).userId);
     const rows = db.prepare('SELECT id, name, url, username, base_path FROM webdav_configs').all() as any[];
     return { configs: rows };
   });
 
   // 添加 WebDAV 配置
   app.post('/api/webdav', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { name, url, username, password, base_path } = req.body as {
       name: string;
       url: string;
@@ -88,6 +88,7 @@ export async function webdavRoutes(app: FastifyInstance) {
 
   // 更新 WebDAV 配置
   app.put('/api/webdav/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { name, url, username, password, base_path } = req.body as {
       name?: string;
@@ -97,7 +98,6 @@ export async function webdavRoutes(app: FastifyInstance) {
       base_path?: string;
     };
 
-    // 获取现有配置
     const existing = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(Number(id)) as any;
     if (!existing) {
       return reply.code(404).send({ error: '配置不存在' });
@@ -109,7 +109,6 @@ export async function webdavRoutes(app: FastifyInstance) {
     const newPassword = password !== undefined ? password : existing.password;
     const newBasePath = base_path || existing.base_path;
 
-    // 测试连接
     try {
       const client = getWebdavClient(newUrl, newUsername || undefined, newPassword || undefined);
       await client.getDirectoryContents(newBasePath);
@@ -126,6 +125,7 @@ export async function webdavRoutes(app: FastifyInstance) {
 
   // 删除 WebDAV 配置
   app.delete('/api/webdav/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     db.prepare('DELETE FROM webdav_configs WHERE id = ?').run(Number(id));
     return { success: true };
@@ -133,6 +133,7 @@ export async function webdavRoutes(app: FastifyInstance) {
 
   // 测试 WebDAV 连接
   app.post('/api/webdav/:id/test', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(Number(id)) as any;
     
@@ -151,6 +152,7 @@ export async function webdavRoutes(app: FastifyInstance) {
 
   // 浏览 WebDAV 目录
   app.get('/api/webdav/:id/browse', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { dir } = req.query as { dir?: string };
     
@@ -187,7 +189,6 @@ export async function webdavRoutes(app: FastifyInstance) {
 
       return {
         currentPath: targetPath,
-        // WebDAV URL 本身用 / 分隔，不需要兼容 Windows 路径
         parentPath: targetPath !== '/' ? targetPath.split('/').slice(0, -1).join('/') || '/' : null,
         directories,
         files,
@@ -198,8 +199,9 @@ export async function webdavRoutes(app: FastifyInstance) {
     }
   });
 
-  // 获取 WebDAV 文件流（代理下载，支持 Range 请求）
+  // 获取 WebDAV 文件流
   app.get('/api/webdav/:id/stream', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { path: filePath } = req.query as { path?: string };
 
@@ -215,39 +217,31 @@ export async function webdavRoutes(app: FastifyInstance) {
     try {
       const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
       
-      // 确保缓存目录存在
       ensureCacheDir();
       const cachePath = getCachePath(Number(id), filePath);
       
-      // 获取远程文件信息
       const stat = await client.stat(filePath) as any;
       const remoteSize = stat?.size || 0;
-      const remoteLastMod = stat?.lastmod ? new Date(stat.lastmod).getTime() : Date.now();
       
-      // 检查缓存是否存在且有效
       let useCache = false;
       if (fs.existsSync(cachePath)) {
         try {
           const cacheStat = fs.statSync(cachePath);
-          // 缓存大小匹配且比远程文件旧（远程已更新）或大小匹配
           if (cacheStat.size === remoteSize) {
             useCache = true;
           }
         } catch {}
       }
       
-      // 如果没有有效缓存，下载文件
       if (!useCache) {
         const arrayBuffer = await client.getFileContents(filePath) as ArrayBuffer;
         const buffer = Buffer.from(arrayBuffer);
         fs.writeFileSync(cachePath, buffer);
       }
       
-      // 现在从缓存文件流式传输（支持完整 Range）
       const fileStat = fs.statSync(cachePath);
       const fileSize = fileStat.size;
       
-      // 设置 Content-Type
       const ext = filePath.split('.').pop()?.toLowerCase();
       const mimeTypes: Record<string, string> = {
         mp3: 'audio/mpeg',
@@ -263,7 +257,6 @@ export async function webdavRoutes(app: FastifyInstance) {
       reply.header('Content-Type', mimeTypes[ext || ''] || 'audio/mpeg');
       reply.header('Accept-Ranges', 'bytes');
       
-      // 处理 Range 请求
       const range = req.headers.range;
       
       if (range) {
@@ -280,7 +273,6 @@ export async function webdavRoutes(app: FastifyInstance) {
         return reply.send(stream);
       }
       
-      // 非 Range 请求，发送整个文件
       reply.header('Content-Length', fileSize);
       return reply.send(fs.createReadStream(cachePath));
     } catch (err) {
@@ -290,6 +282,7 @@ export async function webdavRoutes(app: FastifyInstance) {
 
   // 扫描 WebDAV 目录并创建播放列表
   app.post('/api/webdav/:id/scan', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { dir, playlistId, playlistName, includeSubdirs } = req.body as {
       dir?: string;
@@ -307,7 +300,6 @@ export async function webdavRoutes(app: FastifyInstance) {
       const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
       const targetPath = dir || config.base_path || '/';
       
-      // 递归扫描获取所有音乐文件
       const musicFiles: { path: string; name: string; size: number }[] = [];
       
       async function scanDirectory(path: string, recursive: boolean) {
@@ -332,7 +324,6 @@ export async function webdavRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: '目录中没有找到音乐文件' });
       }
 
-      // 将 WebDAV 文件作为音轨存入数据库
       const webdavPathPrefix = `webdav://${id}`;
       const trackIds: number[] = [];
       
@@ -340,11 +331,9 @@ export async function webdavRoutes(app: FastifyInstance) {
         const trackPath = `${webdavPathPrefix}${file.path}`;
         const title = file.name.replace(/\.[^.]+$/, '');
         
-        // 检查是否已存在
         let track = db.prepare('SELECT id FROM tracks WHERE path = ?').get(trackPath) as any;
         
         if (!track) {
-          // 插入新音轨
           const result = db.prepare(`
             INSERT INTO tracks (path, title, artist, album, duration, rating, play_count, skip_count, date_added)
             VALUES (?, ?, null, null, null, 0, 0, 0, ?)
@@ -355,7 +344,6 @@ export async function webdavRoutes(app: FastifyInstance) {
         }
       }
 
-      // 创建或使用现有播放列表
       let playlistIdToUse = playlistId;
       if (!playlistIdToUse && playlistName) {
         const result = db.prepare(`
@@ -364,7 +352,6 @@ export async function webdavRoutes(app: FastifyInstance) {
         `).run(playlistName, Date.now(), Date.now());
         playlistIdToUse = Number(result.lastInsertRowid);
         
-        // 添加播放列表项（目录来源）
         db.prepare(`
           INSERT INTO playlist_items (playlist_id, type, path, include_subdirs, "order")
           VALUES (?, 'directory', ?, ?, 0)
@@ -375,10 +362,8 @@ export async function webdavRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: '需要指定播放列表' });
       }
 
-      // 清空现有音轨
       db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(playlistIdToUse);
       
-      // 添加音轨到播放列表
       const insertStmt = db.prepare(`
         INSERT INTO playlist_tracks (playlist_id, track_id, "order")
         VALUES (?, ?, ?)
@@ -388,10 +373,8 @@ export async function webdavRoutes(app: FastifyInstance) {
         insertStmt.run(playlistIdToUse, trackIds[i], i);
       }
       
-      // 更新播放列表时间
       db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), playlistIdToUse);
 
-      // 返回播放列表信息
       const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistIdToUse) as any;
       const tracks = db.prepare(`
         SELECT t.*, pt."order" 

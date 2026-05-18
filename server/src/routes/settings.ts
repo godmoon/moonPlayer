@@ -1,6 +1,6 @@
 // 设置路由
 import type { FastifyPluginCallback } from 'fastify';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 import { updateTranscodeFormats } from '../utils/webdavCache.js';
 
 // 默认导航项顺序
@@ -8,8 +8,8 @@ const DEFAULT_NAV_ORDER = ['browse', 'playlists', 'current', 'search', 'history'
 
 export const settingsRoutes: FastifyPluginCallback = (fastify, _options, done) => {
   // 获取导航顺序
-  fastify.get('/api/settings/nav-order', async () => {
-    const db = getDatabase();
+  fastify.get('/api/settings/nav-order', async (req) => {
+    const db = getUserDatabase((req as any).userId);
     const row = db.prepare("SELECT value FROM settings WHERE key = 'nav_order'").get() as { value: string } | undefined;
     
     if (row) {
@@ -24,6 +24,7 @@ export const settingsRoutes: FastifyPluginCallback = (fastify, _options, done) =
 
   // 设置导航顺序
   fastify.put<{ Body: { order: string[] } }>('/api/settings/nav-order', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { order } = req.body;
     
     // 验证
@@ -38,7 +39,6 @@ export const settingsRoutes: FastifyPluginCallback = (fastify, _options, done) =
     const missingItems = DEFAULT_NAV_ORDER.filter(item => !validOrder.includes(item));
     const finalOrder = [...validOrder, ...missingItems];
     
-    const db = getDatabase();
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('nav_order', ?)").run(finalOrder.join(','));
     
     return { success: true, order: finalOrder };

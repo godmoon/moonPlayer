@@ -1,12 +1,11 @@
 // 跳转历史路由（用于学习片头片尾）
 import type { FastifyInstance } from 'fastify';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 
 export async function skipRoutes(app: FastifyInstance) {
-  const db = getDatabase();
-
   // 记录跳过片头
   app.post('/api/skip/intro', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { trackId, playlistId, position } = req.body as {
       trackId: number;
       playlistId: number;
@@ -28,7 +27,7 @@ export async function skipRoutes(app: FastifyInstance) {
       let avgPosition = 0;
       let totalWeight = 0;
       history.forEach((h, i) => {
-        const weight = Math.pow(0.8, i); // 最新权重 0.8，依次递减
+        const weight = Math.pow(0.8, i);
         avgPosition += h.position * weight;
         totalWeight += weight;
       });
@@ -42,15 +41,15 @@ export async function skipRoutes(app: FastifyInstance) {
 
   // 记录跳过片尾
   app.post('/api/skip/outro', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { trackId, playlistId, position } = req.body as {
       trackId: number;
       playlistId: number;
-      position: number; // 从片尾开始的位置（秒）
+      position: number;
     };
 
     db.prepare('INSERT INTO skip_history (track_id, playlist_id, skip_type, position, timestamp) VALUES (?, ?, ?, ?, ?)').run(trackId, playlistId, 'outro', position, Date.now());
 
-    // 计算移动平均值并更新播放列表的 skip_outro
     const history = db.prepare(`
       SELECT position FROM skip_history
       WHERE playlist_id = ? AND skip_type = 'outro'
@@ -76,6 +75,7 @@ export async function skipRoutes(app: FastifyInstance) {
 
   // 获取播放列表的跳过设置
   app.get('/api/playlists/:id/skip-settings', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const playlist = db.prepare('SELECT skip_intro, skip_outro FROM playlists WHERE id = ?').get(Number(id)) as { skip_intro: number; skip_outro: number } | undefined;
@@ -92,6 +92,7 @@ export async function skipRoutes(app: FastifyInstance) {
 
   // 手动设置跳过参数
   app.put('/api/playlists/:id/skip-settings', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { skipIntro, skipOutro } = req.body as {
       skipIntro?: number;

@@ -165,6 +165,14 @@ const getAudio = useCallback(() => {
     if (audio) audio.volume = volume / 100;
   }, [volume, getAudio]);
 
+  // 应用播放列表的播放速度
+  useEffect(() => {
+    const audio = getAudio();
+    if (audio) {
+      audio.playbackRate = currentPlaylist?.playbackSpeed ?? 1.0;
+    }
+  }, [currentPlaylist?.playbackSpeed, currentTrack?.id, getAudio]);
+
   // 睡眠定时器检查
   useEffect(() => {
     if (sleepTimer.mode === 'off') return;

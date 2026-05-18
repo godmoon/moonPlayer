@@ -5,7 +5,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 import { getFfmpegPath, getFfprobePath, checkFfmpegAvailable } from '../utils/ffmpeg.js';
 import { parseFile } from 'music-metadata';
 import {
@@ -39,10 +39,9 @@ const QUALITY_LABELS: Record<string, string> = {
 };
 
 export async function streamRoutes(app: FastifyInstance) {
-  const db = getDatabase();
-
   // 流式传输音频文件，支持 Range 请求
   app.get('/api/stream/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { quality } = req.query as { quality?: string };
 
@@ -56,7 +55,7 @@ export async function streamRoutes(app: FastifyInstance) {
 
     // 检查是否是 WebDAV 文件
     if (filePath.startsWith('webdav://')) {
-      return await handleWebdavStream(req, reply, filePath, quality);
+      return await handleWebdavStream(req, reply, filePath, quality, (req as any).userId);
     }
 
     // 检查本地文件是否存在
@@ -184,6 +183,7 @@ export async function streamRoutes(app: FastifyInstance) {
 
   // 获取音频时长 API
   app.get('/api/duration/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(Number(id));
@@ -207,7 +207,7 @@ export async function streamRoutes(app: FastifyInstance) {
       if (match) {
         const configId = parseInt(match[1], 10);
         const webdavPath = match[2];
-        const { duration, artist, album } = await getWebdavFileMetadata(configId, webdavPath);
+        const { duration, artist, album } = await getWebdavFileMetadata(configId, webdavPath, (req as any).userId);
         
         if (duration) {
           db.prepare('UPDATE tracks SET duration = ?, artist = COALESCE(artist, ?), album = COALESCE(album, ?) WHERE id = ?').run(duration, artist, album, Number(id));
@@ -232,6 +232,7 @@ export async function streamRoutes(app: FastifyInstance) {
 
   // 获取实际音频流比特率（考虑转码设置）
   app.get('/api/stream-bitrate/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     const { quality } = req.query as { quality?: string };
 
@@ -298,7 +299,7 @@ export async function streamRoutes(app: FastifyInstance) {
         // 如果缓存不存在或获取失败，下载到临时文件获取原始比特率
         if (sourceBitrate === 0) {
           try {
-            const config = getWebdavConfig(configId);
+            const config = getWebdavConfig(configId, (req as any).userId);
             if (config) {
               const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
               const tempPath = path.join(os.tmpdir(), `moonplayer_temp_${Date.now()}.mp3`);
@@ -330,6 +331,7 @@ export async function streamRoutes(app: FastifyInstance) {
 
   // 通过路径直接流式传输（用于未扫描的文件）
   app.get('/api/stream-path', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { path: filePath } = req.query as { path?: string };
 
     if (!filePath) {
@@ -641,13 +643,13 @@ async function getDurationViaFfprobe(filePath: string): Promise<number | null> {
 }
 
 // 获取 WebDAV 文件时长和元数据
-async function getWebdavFileMetadata(configId: number, filePath: string): Promise<{ duration: number | null; artist: string | null; album: string | null }> {
+async function getWebdavFileMetadata(configId: number, filePath: string, userId?: number): Promise<{ duration: number | null; artist: string | null; album: string | null }> {
   let duration: number | null = null;
   let artist: string | null = null;
   let album: string | null = null;
   
   try {
-    const config = getWebdavConfig(configId);
+    const config = getWebdavConfig(configId, userId);
     if (!config) return { duration: null, artist: null, album: null };
     
     const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
@@ -669,7 +671,7 @@ async function getWebdavFileMetadata(configId: number, filePath: string): Promis
     artist = metadata.common.artist || null;
     album = metadata.common.album || null;
     
-    const fallbackDuration = await getWebdavDurationViaDownload(configId, filePath);
+    const fallbackDuration = await getWebdavDurationViaDownload(configId, filePath, userId);
     return { duration: fallbackDuration, artist, album };
   } catch (err) {
     console.error('获取 WebDAV 文件元数据失败:', err);
@@ -678,10 +680,10 @@ async function getWebdavFileMetadata(configId: number, filePath: string): Promis
 }
 
 // 下载 WebDAV 文件并用 ffprobe 获取时长
-async function getWebdavDurationViaDownload(configId: number, filePath: string): Promise<number | null> {
+async function getWebdavDurationViaDownload(configId: number, filePath: string, userId?: number): Promise<number | null> {
   return new Promise(async (resolve) => {
     try {
-      const config = getWebdavConfig(configId);
+      const config = getWebdavConfig(configId, userId);
       if (!config) {
         resolve(null);
         return;
@@ -723,14 +725,14 @@ async function getWebdavDurationViaDownload(configId: number, filePath: string):
 }
 
 // 处理 WebDAV 文件流（支持 Range 请求和品质转码）
-async function handleWebdavStream(req: any, reply: any, filePath: string, quality?: string) {
+async function handleWebdavStream(req: any, reply: any, filePath: string, quality?: string, userId?: number) {
   const parsed = parseWebdavPath(filePath);
   if (!parsed) {
     return reply.code(400).send({ error: '无效的 WebDAV 路径格式' });
   }
   
   const { configId, webdavPath } = parsed;
-  const config = getWebdavConfig(configId);
+  const config = getWebdavConfig(configId, userId);
   if (!config) {
     return reply.code(404).send({ error: 'WebDAV 配置不存在' });
   }

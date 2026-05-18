@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { createClient } from 'webdav';
-import { getDatabase } from '../db/schema.js';
+import { getDatabase, getUserDatabase } from '../db/schema.js';
 
 // WebDAV 客户端缓存
 const webdavClients = new Map<string, any>();
@@ -95,12 +95,12 @@ export function needsTranscode(filePath: string): boolean {
 const webdavConfigCache = new Map<number, any>();
 
 // 获取 WebDAV 配置
-export function getWebdavConfig(configId: number): any | null {
+export function getWebdavConfig(configId: number, userId?: number): any | null {
   if (webdavConfigCache.has(configId)) {
     return webdavConfigCache.get(configId);
   }
   
-  const db = getDatabase();
+  const db = userId ? getUserDatabase(userId) : getDatabase();
   const config = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as any;
   if (config) {
     webdavConfigCache.set(configId, config);
@@ -109,13 +109,13 @@ export function getWebdavConfig(configId: number): any | null {
 }
 
 // 下载 WebDAV 文件到缓存（返回缓存路径和 Buffer）
-export async function downloadWebdavFile(configId: number, filePath: string): Promise<{
+export async function downloadWebdavFile(configId: number, filePath: string, userId?: number): Promise<{
   cachePath: string;
   buffer: Buffer;
   needsTranscode: boolean;
   transcodeCachePath?: string;
 } | null> {
-  const config = getWebdavConfig(configId);
+  const config = getWebdavConfig(configId, userId);
   if (!config) return null;
   
   ensureCacheDir();

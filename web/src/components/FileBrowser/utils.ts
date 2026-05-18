@@ -43,6 +43,7 @@ export function createPlaylistObject(playlist: any): Playlist {
     isAuto: playlist.is_auto === 1 || playlist.isAuto === true,
     playMode: playlist.play_mode || playlist.playMode || 'sequential',
     skipIntro: playlist.skip_intro || playlist.skipIntro,
-    skipOutro: playlist.skip_outro || playlist.skipOutro
+    skipOutro: playlist.skip_outro || playlist.skipOutro,
+    playbackSpeed: playlist.playback_speed ?? playlist.playbackSpeed ?? 1.0
   };
 }

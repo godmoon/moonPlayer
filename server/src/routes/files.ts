@@ -2,13 +2,12 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'fs';
 import path from 'path';
-import { getDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath, getPathName } from '../db/schema.js';
 
 export async function filesRoutes(app: FastifyInstance) {
-  const db = getDatabase();
-
   // 获取配置的音乐目录列表
-  app.get('/api/music-paths', async () => {
+  app.get('/api/music-paths', async (req) => {
+    const db = getUserDatabase((req as any).userId);
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
     const paths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
     return { paths };
@@ -16,6 +15,7 @@ export async function filesRoutes(app: FastifyInstance) {
 
   // 设置音乐目录列表
   app.post('/api/music-paths', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { paths } = req.body as { paths: string[] };
     if (!paths || !Array.isArray(paths)) {
       return reply.code(400).send({ error: 'paths 必须是数组' });
@@ -39,7 +39,8 @@ export async function filesRoutes(app: FastifyInstance) {
   });
 
   // 获取根目录列表（多路径）
-  app.get('/api/roots', async () => {
+  app.get('/api/roots', async (req) => {
+    const db = getUserDatabase((req as any).userId);
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
     const paths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
     const roots = paths.map((p: string) => ({
@@ -51,6 +52,7 @@ export async function filesRoutes(app: FastifyInstance) {
 
   // 浏览目录
   app.get('/api/browse', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { dir } = req.query as { dir?: string };
 
     // 获取音乐根目录列表

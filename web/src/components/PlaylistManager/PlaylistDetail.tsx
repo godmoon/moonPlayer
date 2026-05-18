@@ -26,6 +26,7 @@ export function PlaylistDetail({ playlistId, onClose }: {
   const [editSkipIntro, setEditSkipIntro] = useState(0);
   const [editSkipOutro, setEditSkipOutro] = useState(0);
   const [editQualityMode, setEditQualityMode] = useState('');
+  const [editPlaybackSpeed, setEditPlaybackSpeed] = useState(1.0);
   const [saving, setSaving] = useState(false);
   // 从初始化历史获取的播放位置（用于显示非当前播放列表的信息）
   const [initialLastTrackId, setInitialLastTrackId] = useState<number | null>(null);
@@ -57,7 +58,10 @@ const prevHighlightRef = useRef<number | null | undefined>(null);
       const result = await getPlaylist(playlistId);
       if (signal?.aborted) return;
       setPlaylist(result);
-      
+      if (result.track_sort) {
+        setTrackSort(result.track_sort);
+      }
+
       // 只加载已有数据，不重新扫描
       const tracksResult = await getPlaylistTracks(playlistId);
       if (signal?.aborted) return;
@@ -108,7 +112,8 @@ const prevHighlightRef = useRef<number | null | undefined>(null);
             playMode: result.play_mode,
             skipIntro: result.skip_intro,
             skipOutro: result.skip_outro,
-            qualityMode: result.quality_mode
+            qualityMode: result.quality_mode,
+            playbackSpeed: result.playback_speed ?? 1.0
           };
           setCurrentPlaylist(pl, tracksResult.tracks);
 
@@ -169,6 +174,7 @@ useEffect(() => {
       setEditSkipIntro(playlist.skip_intro || 0);
       setEditSkipOutro(playlist.skip_outro || 0);
       setEditQualityMode(playlist.quality_mode || '');
+      setEditPlaybackSpeed(playlist.playback_speed ?? 1.0);
     }
   }, [showSettings, playlist]);
 
@@ -296,7 +302,7 @@ useEffect(() => {
     if (!editName.trim()) return;
     setSaving(true);
     try {
-      await updatePlaylist(playlistId, { name: editName.trim(), playMode: editPlayMode, qualityMode: editQualityMode });
+      await updatePlaylist(playlistId, { name: editName.trim(), playMode: editPlayMode, qualityMode: editQualityMode, playbackSpeed: editPlaybackSpeed });
       if (editSkipIntro > 0 || editSkipOutro > 0) {
         await setSkipSettings(playlistId, { skipIntro: editSkipIntro, skipOutro: editSkipOutro });
       }
@@ -306,7 +312,8 @@ useEffect(() => {
         play_mode: editPlayMode,
         skip_intro: editSkipIntro,
         skip_outro: editSkipOutro,
-        quality_mode: editQualityMode
+        quality_mode: editQualityMode,
+        playback_speed: editPlaybackSpeed
       }));
 
       // 处理来源变更
@@ -357,7 +364,8 @@ useEffect(() => {
           playMode: result.playlist.play_mode,
           skipIntro: result.playlist.skip_intro,
           skipOutro: result.playlist.skip_outro,
-          qualityMode: result.playlist.quality_mode
+          qualityMode: result.playlist.quality_mode,
+          playbackSpeed: result.playlist.playback_speed ?? 1.0
         };
         setCurrentPlaylist(pl, result.tracks);
         setCurrentTrack(result.tracks[0]);
@@ -382,7 +390,8 @@ useEffect(() => {
         playMode: playlist.play_mode,
         skipIntro: playlist.skip_intro,
         skipOutro: playlist.skip_outro,
-        qualityMode: playlist.quality_mode
+        qualityMode: playlist.quality_mode,
+        playbackSpeed: playlist.playback_speed ?? 1.0
       };
       setCurrentPlaylist(pl, sortedTracks);
       setCurrentTrack(track);
@@ -429,7 +438,7 @@ if (loading && !playlist) {
       <div className="p-3 border-b border-gray-700 flex items-center justify-between">
         <div>
           <h2 className="font-medium">{playlist.name}</h2>
-          <div className="text-xs text-gray-500">{tracks.length} 首歌曲 · 模式: {PLAY_MODES.find(m => m.value === playlist.play_mode)?.label || playlist.play_mode}</div>
+          <div className="text-xs text-gray-500">{tracks.length} 首歌曲</div>
         </div>
         <div className="flex gap-2">
           <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }} className={`p-2 rounded md:px-3 ${showSearch ? 'bg-purple-600 text-white' : 'bg-gray-600 hover:bg-gray-500'}`} title="搜索">
@@ -437,7 +446,15 @@ if (loading && !playlist) {
           </button>
           <select
             value={trackSort}
-            onChange={(e) => setTrackSort(e.target.value)}
+            onChange={async (e) => {
+              const value = e.target.value;
+              setTrackSort(value);
+              try {
+                await updatePlaylist(playlistId, { trackSort: value });
+              } catch (err) {
+                console.error('保存排序设置失败:', err);
+              }
+            }}
             className="px-1 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm"
           >
             {TRACK_SORT_OPTIONS.map((opt) => (
@@ -522,6 +539,22 @@ if (loading && !playlist) {
                     onChange={(e) => setEditSkipOutro(Number(e.target.value))}
                     className="w-full px-3 py-1 bg-gray-700 rounded text-sm"
                   />
+                </div>
+              </div>
+              <div className="mb-3">
+                <label className="block text-sm text-gray-400 mb-1">播放速度</label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setEditPlaybackSpeed(Math.round((editPlaybackSpeed - 0.1) * 10) / 10)}
+                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                    disabled={editPlaybackSpeed <= 0.5}
+                  >−</button>
+                  <span className="text-sm font-mono w-12 text-center">{editPlaybackSpeed.toFixed(1)}x</span>
+                  <button
+                    onClick={() => setEditPlaybackSpeed(Math.round((editPlaybackSpeed + 0.1) * 10) / 10)}
+                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                    disabled={editPlaybackSpeed >= 2.0}
+                  >+</button>
                 </div>
               </div>
 

@@ -1,12 +1,11 @@
 // 播放历史路由
 import type { FastifyInstance } from 'fastify';
-import { getDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getUserDatabase, saveDatabase, normalizePath } from '../db/schema.js';
 
 export async function historyRoutes(app: FastifyInstance) {
-  const db = getDatabase();
-
   // 获取播放列表的最近播放记录
   app.get('/api/history/playlist/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
 
     const history = db.prepare(`
@@ -31,6 +30,7 @@ export async function historyRoutes(app: FastifyInstance) {
 
   // 记录播放历史（先删除旧记录再插入）
   app.post('/api/history', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { playlistId, trackId, position } = req.body as {
       playlistId: number;
       trackId: number;
@@ -46,12 +46,14 @@ export async function historyRoutes(app: FastifyInstance) {
 
   // 清除历史
   app.delete('/api/history', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     db.prepare('DELETE FROM play_history').run();
     return { success: true };
   });
 
   // 删除单个播放列表的历史记录
   app.delete('/api/history/playlist/:id', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { id } = req.params as { id: string };
     db.prepare('DELETE FROM play_history WHERE playlist_id = ?').run(Number(id));
     return { success: true };

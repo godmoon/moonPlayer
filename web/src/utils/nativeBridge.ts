@@ -24,19 +24,19 @@ function getAudio(): HTMLAudioElement | null {
   return document.querySelector('audio');
 }
 
-// 前进/后退递增逻辑（与 PlayerBar 保持一致）
+// 前进/后退递增逻辑（与 PlayerBar 保持一致，每个方向独立跟踪）
 const SKIP_AMOUNTS = [5, 10, 30, 60, 120];
-let skipState = { forward: 5, backward: 5 };
-let skipTimeout: ReturnType<typeof setTimeout> | null = null;
+const skipState = { forward: 5, backward: 5 };
+const skipTimeouts: Record<string, ReturnType<typeof setTimeout> | null> = { forward: null, backward: null };
 
 function getSkipAmount(direction: 'forward' | 'backward'): number {
   const amount = skipState[direction];
   const idx = SKIP_AMOUNTS.indexOf(amount);
   skipState[direction] = idx < SKIP_AMOUNTS.length - 1 ? SKIP_AMOUNTS[idx + 1] : 120;
-  // 3秒后重置
-  if (skipTimeout) clearTimeout(skipTimeout);
-  skipTimeout = setTimeout(() => {
-    skipState = { forward: 5, backward: 5 };
+  // 每个方向独立重置（3秒后）
+  if (skipTimeouts[direction]) clearTimeout(skipTimeouts[direction]);
+  skipTimeouts[direction] = setTimeout(() => {
+    skipState[direction] = 5;
   }, 3000);
   return amount;
 }
@@ -96,13 +96,20 @@ export function setupNativeBridge() {
       const audio = getAudio();
       if (!audio) return;
       const store = usePlayerStore.getState();
+      if (!store.currentTrack) return;
       const amount = getSkipAmount('forward');
-      const newTime = audio.currentTime + amount;
+      const currentTime = audio.currentTime;
       const duration = audio.duration || 0;
+      const newTime = currentTime + amount;
       if (newTime >= duration - 0.5 && duration > 0) {
-        // 超出文件，切换下一曲
-        store.playNext();
-        store.setIsPlaying(true);
+        // 跨文件跳转：与 PlayerBar 逻辑一致
+        if (store.playMode === 'sequential' && store.playlistTracks.length > 0) {
+          const currentIndex = store.playlistTracks.findIndex(t => t.id === store.currentTrack!.id);
+          const nextIndex = (currentIndex + 1) % store.playlistTracks.length;
+          store.setCurrentTrack(store.playlistTracks[nextIndex]);
+        } else {
+          store.playNext();
+        }
         setTimeout(syncToNative, 200);
       } else {
         audio.currentTime = Math.min(newTime, duration - 0.5);
@@ -113,20 +120,25 @@ export function setupNativeBridge() {
       const audio = getAudio();
       if (!audio) return;
       const store = usePlayerStore.getState();
+      if (!store.currentTrack) return;
       const amount = getSkipAmount('backward');
-      const newTime = audio.currentTime - amount;
-      if (newTime < 0) {
-        // 切换上一曲
-        store.playPrevious();
+      const currentTime = audio.currentTime;
+      const newTime = currentTime - amount;
+      if (newTime < 0 && store.playMode === 'sequential' && store.playlistTracks.length > 0) {
+        // 跨文件跳转：与 PlayerBar 逻辑一致
+        const currentIndex = store.playlistTracks.findIndex(t => t.id === store.currentTrack!.id);
+        const prevIndex = currentIndex <= 0 ? store.playlistTracks.length - 1 : currentIndex - 1;
+        const prevTrack = store.playlistTracks[prevIndex];
+        const seekFromEnd = amount - currentTime;
+        const prevDuration = prevTrack.duration || 0;
+        if (prevDuration > 0 && seekFromEnd < prevDuration) {
+          store.setPendingSeekPosition(prevDuration - seekFromEnd);
+        } else {
+          store.setPendingSeekPosition(0);
+        }
+        store.setCurrentTrack(prevTrack);
         store.setIsPlaying(true);
-        // 上一曲从末尾开始
-        setTimeout(() => {
-          const newAudio = getAudio();
-          if (newAudio && newAudio.duration > 0) {
-            newAudio.currentTime = Math.max(0, newAudio.duration - amount);
-          }
-          syncToNative();
-        }, 500);
+        setTimeout(syncToNative, 200);
       } else {
         audio.currentTime = Math.max(newTime, 0);
         syncToNative();
