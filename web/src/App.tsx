@@ -13,7 +13,7 @@ import { SearchView } from './components/SearchView';
 import { RecycleBin } from './components/RecycleBin';
 import { getNavOrder, getCurrentUser } from './stores/api';
 import { detectFormatSupport, logFormatSupport } from './utils/formatSupport';
-import { setupNativeBridge } from './utils/nativeBridge';
+import { setupNativeBridge, teardownNativeBridge } from './utils/nativeBridge';
 
 type AuthState = 'checking' | 'needSetup' | 'needLogin' | 'authenticated';
 
@@ -46,6 +46,10 @@ function App() {
     
     // 设置 Android/iOS 原生桥接
     setupNativeBridge();
+
+    return () => {
+      teardownNativeBridge();
+    };
   }, []);
 
   const checkAuth = async () => {

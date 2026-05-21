@@ -201,7 +201,7 @@ export async function performScan(playlistId: number, db: any, app: FastifyInsta
 
   // 插入或更新音轨
   const insertTrack = db.prepare('INSERT OR IGNORE INTO tracks (path, title, date_added) VALUES (?, ?, ?)');
-  const getTrack = db.prepare('SELECT id FROM tracks WHERE path = ?') as any;
+  const getTrack = db.prepare('SELECT id, recycled FROM tracks WHERE path = ?') as any;
   const trackIds: number[] = [];
   const seenTrackIds = new Set<number>();
 
@@ -216,11 +216,13 @@ export async function performScan(playlistId: number, db: any, app: FastifyInsta
     }
     
     insertTrack.run(trackPath, title, Date.now());
-    const track = getTrack.get(trackPath) as { id: number } | undefined;
+    const track = getTrack.get(trackPath) as { id: number; recycled: number | null } | undefined;
     if (track) {
       const trackId = track.id;
       if (!seenTrackIds.has(trackId)) {
         seenTrackIds.add(trackId);
+        // 跳过回收站中的歌曲
+        if (track.recycled) continue;
         trackIds.push(trackId);
       }
     }
@@ -515,14 +517,17 @@ export async function playlistRoutes(app: FastifyInstance) {
     }
 
     // 启动后台扫描（不等待完成）
+    // 使用独立的数据库连接避免与请求处理冲突
+    const userId = (req as any).userId;
     (async () => {
       try {
-        await performScan(Number(id), db, app);
-        db.prepare('UPDATE scan_tasks SET status = ?, progress = ?, updated_at = ? WHERE task_id = ?')
+        const scanDb = getUserDatabase(userId);
+        await performScan(Number(id), scanDb, app);
+        scanDb.prepare('UPDATE scan_tasks SET status = ?, progress = ?, updated_at = ? WHERE task_id = ?')
           .run('complete', 100, Date.now(), task_id);
       } catch (err) {
         console.error('Scan task failed:', err);
-        db.prepare('UPDATE scan_tasks SET status = ?, error = ?, updated_at = ? WHERE task_id = ?')
+        getUserDatabase(userId).prepare('UPDATE scan_tasks SET status = ?, error = ?, updated_at = ? WHERE task_id = ?')
           .run('failed', String(err), Date.now(), task_id);
       }
     })();

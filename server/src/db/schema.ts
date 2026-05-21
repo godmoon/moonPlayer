@@ -55,6 +55,7 @@ class DatabaseWrapper {
   constructor(db: SqlJsDatabase, filePath: string) {
     this.db = db;
     this.filePath = filePath;
+    db.run('PRAGMA foreign_keys = ON');
   }
 
   getDb(): SqlJsDatabase { return this.db; }
@@ -860,6 +861,9 @@ export function changeUserPassword(userId: number, oldPassword: string, newPassw
   database.prepare(`
     UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?
   `).run(hash, salt, now, userId);
+
+  // 使旧会话失效
+  database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
 
   database.save();
 

@@ -1,11 +1,12 @@
 // 统一播放列表组件 - 播放列表列表
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getPlaylists, getPlaylistTracks, recordHistory, createPlaylist, getTags, getPlaylist } from '../stores/api';
+import { getPlaylists, getPlaylistTracks, recordHistory, createPlaylist, getTags, getPlaylist, deletePlaylist, addItemCondition } from '../stores/api';
 import { usePlayerStore } from '../stores/playerStore';
 import { setPendingSeekPosition } from './AudioPlayer/PlayerBar';
 import type { Track, Playlist } from '../stores/playerStore';
 import { PLAYLIST_SORT_OPTIONS, MATCH_FIELDS, MATCH_OP_LABELS, type SourceType } from './PlaylistManager/utils';
 import { AITaggerModal } from './PlaylistManager/AITaggerModal';
+import { toTracks } from './FileBrowser/utils';
 
 interface PlaylistWithHistory {
   id: number;
@@ -112,7 +113,6 @@ export function UnifiedPlaylist({ onSelectPlaylist }: {
   const handleDelete = async () => {
     if (!deleteConfirm) return;
     try {
-      const { deletePlaylist } = await import('../stores/api');
       await deletePlaylist(deleteConfirm.id);
       setPlaylists(prev => prev.filter(p => p.id !== deleteConfirm.id));
     } catch (err) {
@@ -187,7 +187,6 @@ export function UnifiedPlaylist({ onSelectPlaylist }: {
       
       // 如果是匹配类型，添加条件
       if (createSourceType === 'match' && playlist.id) {
-        const { addItemCondition } = await import('../stores/api');
         // 先获取刚创建的 item
         const plDetail = await getPlaylist(playlist.id);
         const firstItem = plDetail.items?.[0];
@@ -247,7 +246,7 @@ export function UnifiedPlaylist({ onSelectPlaylist }: {
 
       // 只加载已有数据，不重新扫描
       const result = await getPlaylistTracks(item.id);
-      const trackList = result.tracks as Track[];
+      const trackList = toTracks(result.tracks);
 
       // 即使列表为空，也进入详情页（方便用户添加来源）
       if (trackList.length === 0) {
@@ -264,7 +263,7 @@ export function UnifiedPlaylist({ onSelectPlaylist }: {
         playMode: result.playlist.play_mode,
         skipIntro: result.playlist.skip_intro,
         skipOutro: result.playlist.skip_outro,
-        qualityMode: result.playlist.quality_mode,
+        qualityMode: result.playlist.quality_mode ?? undefined,
         playbackSpeed: result.playlist.playback_speed ?? 1.0
       };
       setCurrentPlaylist(pl, trackList);

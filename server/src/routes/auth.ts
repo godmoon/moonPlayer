@@ -72,9 +72,10 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
     const userId = user?.id || 1;
     const token = createSession(userId);
 
+    const isSecure = process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === 'true';
     reply.setCookie(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: false,  // 开发环境不支持 HTTPS，所以禁用 Secure
+      secure: isSecure,
       sameSite: 'lax',
       maxAge: COOKIE_MAX_AGE,
       path: '/'
@@ -117,9 +118,10 @@ export const authRoutes: FastifyPluginCallback = (fastify, _options, done) => {
     recordLoginAttempt(ip, true);
     const token = createSession(result.userId!);
 
+    const isSecure = process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === 'true';
     reply.setCookie(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: false,  // 开发环境不支持 HTTPS
+      secure: isSecure,
       sameSite: 'lax',
       maxAge: COOKIE_MAX_AGE,
       path: '/'

@@ -1,46 +1,9 @@
 // WebDAV 路由
 import type { FastifyInstance } from 'fastify';
-import { createClient } from 'webdav';
-import type { WebDAVClient } from 'webdav';
 import { getUserDatabase, saveDatabase, normalizePath } from '../db/schema.js';
+import { getWebdavClient, ensureCacheDir, getWebdavCachePath } from '../utils/webdavCache.js';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-import crypto from 'crypto';
-
-// WebDAV 文件缓存目录
-const WEBDAV_CACHE_DIR = path.join(os.homedir(), '.moonplayer', 'webdav_cache');
-
-// 确保缓存目录存在
-function ensureCacheDir() {
-  if (!fs.existsSync(WEBDAV_CACHE_DIR)) {
-    fs.mkdirSync(WEBDAV_CACHE_DIR, { recursive: true });
-  }
-}
-
-// 获取缓存文件路径
-function getCachePath(configId: number, filePath: string): string {
-  const hash = crypto.createHash('md5').update(`${configId}:${filePath}`).digest('hex');
-  const ext = path.extname(filePath);
-  return path.join(WEBDAV_CACHE_DIR, `${hash}${ext}`);
-}
-
-// WebDAV 客户端缓存
-const webdavClients = new Map<string, WebDAVClient>();
-
-function getWebdavClient(url: string, username?: string, password?: string): WebDAVClient {
-  const key = `${url}|${username || ''}`;
-  
-  if (!webdavClients.has(key)) {
-    const client = createClient(url, {
-      username,
-      password
-    });
-    webdavClients.set(key, client);
-  }
-  
-  return webdavClients.get(key)!;
-}
 
 export async function webdavRoutes(app: FastifyInstance) {
   // 获取所有 WebDAV 配置
@@ -218,7 +181,7 @@ export async function webdavRoutes(app: FastifyInstance) {
       const client = getWebdavClient(config.url, config.username || undefined, config.password || undefined);
       
       ensureCacheDir();
-      const cachePath = getCachePath(Number(id), filePath);
+      const cachePath = getWebdavCachePath(Number(id), filePath);
       
       const stat = await client.stat(filePath) as any;
       const remoteSize = stat?.size || 0;

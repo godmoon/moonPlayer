@@ -7,6 +7,140 @@ const api = axios.create({
   withCredentials: true  // 发送 Cookie
 });
 
+// ========== 公共类型 ==========
+
+/** SQLite 返回的原始音轨（SELECT *） */
+export interface TrackRow {
+  id: number;
+  path: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  tags: string | null;          // JSON string
+  duration: number | null;
+  rating: number;
+  play_count: number;
+  skip_count: number;
+  last_played: number | null;
+  date_added: number;
+  recycled: number;             // 0 | 1
+  recycled_at: number | null;
+}
+
+/** 播放列表相关端点返回的简化音轨（服务端原始 snake_case） */
+export interface PlaylistTrackRow {
+  id: number;
+  path: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  duration: number | null;
+  rating: number;
+  play_count: number;
+  skip_count: number;
+  last_played: number | null;
+  date_added: number;
+}
+
+export interface PlaylistItemCondition {
+  id: number;
+  item_id: number;
+  match_field: string;
+  match_op: string;
+  match_value: string;
+  order: number;
+}
+
+export interface PlaylistItem {
+  id: number;
+  playlist_id: number;
+  type: 'directory' | 'file' | 'filter' | 'match';
+  path: string;
+  include_subdirs: number;
+  filter_regex: string | null;
+  filter_artist: string | null;
+  filter_album: string | null;
+  filter_title: string | null;
+  match_field: string | null;
+  match_op: string | null;
+  match_value: string | null;
+  order: number;
+  conditions?: PlaylistItemCondition[];
+}
+
+export interface PlaylistRow {
+  id: number;
+  name: string;
+  created_at: number;
+  updated_at: number;
+  is_auto: number;
+  play_mode: string;
+  skip_intro: number;
+  skip_outro: number;
+  quality_mode: string | null;
+  playback_speed: number;
+  track_sort: string;
+}
+
+export interface PlaylistListItem extends PlaylistRow {
+  item_count: number;
+  last_track: { id: number; title: string; artist: string; duration: number } | null;
+  last_position: number;
+  last_played_time: number;
+}
+
+export interface PlaylistDetail extends PlaylistRow {
+  items: PlaylistItem[];
+}
+
+export interface PlaylistHistory {
+  lastTrack: {
+    playlist_id: number;
+    id: number;
+    position: number;
+    timestamp: number;
+    path: string;
+    title: string;
+    artist: string;
+    album: string;
+    duration: number;
+  } | null;
+  position: number;
+}
+
+export interface ScanTask {
+  id: number;
+  playlist_id: number;
+  task_id: string;
+  status: 'pending' | 'scanning' | 'complete' | 'failed';
+  progress: number;
+  total: number;
+  current_path: string | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ScanTaskResult {
+  playlist: PlaylistRow;
+  tracks: PlaylistTrackRow[];
+}
+
+export interface RefreshResult {
+  task_id?: string;
+  playlist?: PlaylistRow;
+  tracks?: PlaylistTrackRow[];
+}
+
+export interface AddItemResult {
+  id: number;
+  type: string;
+  path: string;
+  include_subdirs: boolean;
+  alreadyExists?: true;
+}
+
 // ========== 文件浏览 ==========
 
 export async function getMusicPaths(): Promise<string[]> {
@@ -39,17 +173,17 @@ export async function browseDirectory(dir?: string): Promise<BrowseResult> {
 
 // ========== 播放列表 ==========
 
-export async function getPlaylists(): Promise<any[]> {
+export async function getPlaylists(): Promise<PlaylistListItem[]> {
   const res = await api.get('/playlists');
   return res.data;
 }
 
-export async function getPlaylist(id: number): Promise<any> {
+export async function getPlaylist(id: number): Promise<PlaylistDetail> {
   const res = await api.get(`/playlists/${id}`);
   return res.data;
 }
 
-export async function createPlaylist(name: string, items: any[] = [], isAuto = false, playbackSpeed = 1.0): Promise<any> {
+export async function createPlaylist(name: string, items: any[] = [], isAuto = false, playbackSpeed = 1.0): Promise<PlaylistRow> {
   const res = await api.post('/playlists', { name, items, isAuto, playbackSpeed });
   return res.data;
 }
@@ -62,8 +196,8 @@ export async function deletePlaylist(id: number): Promise<void> {
   await api.delete(`/playlists/${id}`);
 }
 
-export async function addPlaylistItem(playlistId: number, type: 'directory' | 'file' | 'filter' | 'match', path: string, includeSubdirs = false, matchData?: { matchField: string; matchOp: string; matchValue: string }): Promise<any> {
-  const body: any = { type, path, includeSubdirs };
+export async function addPlaylistItem(playlistId: number, type: 'directory' | 'file' | 'filter' | 'match', path: string, includeSubdirs = false, matchData?: { matchField: string; matchOp: string; matchValue: string }): Promise<AddItemResult> {
+  const body: Record<string, unknown> = { type, path, includeSubdirs };
   if (matchData) {
     body.matchField = matchData.matchField;
     body.matchOp = matchData.matchOp;
@@ -81,14 +215,14 @@ export async function removePlaylistItem(playlistId: number, itemId: number): Pr
   await api.delete(`/playlists/${playlistId}/items/${itemId}`);
 }
 
-// ========== 条件管理 (AND 条件) ============
+// ========== 条件管理 ============
 
-export async function getItemConditions(playlistId: number, itemId: number): Promise<any[]> {
+export async function getItemConditions(playlistId: number, itemId: number): Promise<PlaylistItemCondition[]> {
   const res = await api.get(`/playlists/${playlistId}/items/${itemId}/conditions`);
   return res.data.conditions;
 }
 
-export async function addItemCondition(playlistId: number, itemId: number, condition: { matchField: string; matchOp: string; matchValue: string }): Promise<any> {
+export async function addItemCondition(playlistId: number, itemId: number, condition: { matchField: string; matchOp: string; matchValue: string }): Promise<PlaylistItemCondition> {
   const res = await api.post(`/playlists/${playlistId}/items/${itemId}/conditions`, condition);
   return res.data;
 }
@@ -101,19 +235,19 @@ export async function removeItemCondition(playlistId: number, itemId: number, co
   await api.delete(`/playlists/${playlistId}/items/${itemId}/conditions/${conditionId}`);
 }
 
-export async function refreshPlaylist(playlistId: number, immediate = false): Promise<{ task_id?: string; playlist?: any; tracks?: any[] }> {
+export async function refreshPlaylist(playlistId: number, immediate = false): Promise<RefreshResult> {
   const res = await api.post(`/playlists/${playlistId}/refresh`, { immediate });
   return res.data;
 }
 
 // 异步扫描：轮询任务状态
-export async function pollScanTask(taskId: string): Promise<{ status: string; progress: number; total: number; error?: string }> {
+export async function pollScanTask(taskId: string): Promise<ScanTask> {
   const res = await api.get(`/scan/tasks/${taskId}`);
   return res.data;
 }
 
 // 异步扫描：获取结果（完成后）
-export async function getScanTaskResult(taskId: string): Promise<{ playlist: any; tracks: any[] }> {
+export async function getScanTaskResult(taskId: string): Promise<ScanTaskResult> {
   const res = await api.get(`/scan/tasks/${taskId}/result`);
   return res.data;
 }
@@ -123,19 +257,19 @@ export async function addPlaylistTrack(playlistId: number, trackId: number): Pro
   return res.data;
 }
 
-export async function getPlaylistTracks(playlistId: number): Promise<{ playlist: any; tracks: any[] }> {
+export async function getPlaylistTracks(playlistId: number): Promise<{ playlist: PlaylistRow; tracks: PlaylistTrackRow[] }> {
   const res = await api.get(`/playlists/${playlistId}/tracks`);
   return res.data;
 }
 
 // ========== 音轨 ==========
 
-export async function scanTracks(paths: string[]): Promise<{ insertedIds: number[]; existingIds: number[] }> {
+export async function scanTracks(paths: string[]): Promise<{ insertedIds: number[]; existingIds: number[]; inserted?: number; existing?: number; errors?: string[] }> {
   const res = await api.post('/tracks/scan', { paths });
   return res.data;
 }
 
-export async function getTrack(id: number): Promise<any> {
+export async function getTrack(id: number): Promise<TrackRow> {
   const res = await api.get(`/tracks/${id}`);
   return res.data;
 }
@@ -149,24 +283,24 @@ export async function recordPlay(id: number, completed: boolean, position: numbe
   await api.post(`/tracks/${id}/play`, { completed, position, playlistId });
 }
 
-export async function searchTracks(query: string): Promise<any[]> {
+export async function searchTracks(query: string): Promise<TrackRow[]> {
   const res = await api.get('/tracks/search', { params: { q: query } });
   return res.data.tracks;
 }
 
 // 获取所有歌曲（搜索为空时使用）
-export async function getAllTracks(): Promise<any[]> {
+export async function getAllTracks(): Promise<TrackRow[]> {
   const res = await api.get('/tracks/all');
   return res.data.tracks;
 }
 
 // 按筛选条件获取歌曲（服务端筛选）
-export async function filterTracksByConditions(conditions: Array<{ match_field: string; match_op: string; match_value: string }>): Promise<any[]> {
+export async function filterTracksByConditions(conditions: Array<{ match_field: string; match_op: string; match_value: string }>): Promise<TrackRow[]> {
   const res = await api.post('/tracks/filter-by-conditions', { conditions });
   return res.data.tracks;
 }
 
-export async function getTopRatedTracks(limit = 100): Promise<any[]> {
+export async function getTopRatedTracks(limit = 100): Promise<TrackRow[]> {
   const res = await api.get('/tracks/top-rated', { params: { limit } });
   return res.data.tracks;
 }
@@ -180,7 +314,7 @@ export async function resetAllRatings(): Promise<void> {
   await api.post('/tracks/reset-rating');
 }
 
-export async function filterTracks(filters: { artist?: string; album?: string; title?: string; minRating?: number; maxRating?: number }): Promise<any[]> {
+export async function filterTracks(filters: { artist?: string; album?: string; title?: string; minRating?: number; maxRating?: number }): Promise<TrackRow[]> {
   const res = await api.get('/tracks/filter', { params: filters });
   return res.data.tracks;
 }
@@ -192,7 +326,7 @@ export async function deleteTrack(trackId: number, deleteFile = false): Promise<
 
 // ========== 回收站 ==========
 
-export async function getRecycledTracks(): Promise<any[]> {
+export async function getRecycledTracks(): Promise<TrackRow[]> {
   const res = await api.get('/tracks/recycled');
   return res.data.tracks;
 }
@@ -217,14 +351,14 @@ export async function removeTrackFromPlaylists(trackId: number): Promise<{ succe
   return res.data;
 }
 
-export async function getLowRatedTracks(threshold = -5, limit = 100): Promise<any[]> {
+export async function getLowRatedTracks(threshold = -5, limit = 100): Promise<TrackRow[]> {
   const res = await api.get('/tracks/low-rated', { params: { threshold, limit } });
   return res.data.tracks;
 }
 
 // ========== 历史记录 ==========
 
-export async function getPlaylistHistory(playlistId: number): Promise<any> {
+export async function getPlaylistHistory(playlistId: number): Promise<PlaylistHistory> {
   const res = await api.get(`/history/playlist/${playlistId}`);
   return res.data;
 }
@@ -276,7 +410,7 @@ export async function setSkipSettings(playlistId: number, settings: { skipIntro?
   await api.put(`/playlists/${playlistId}/skip-settings`, settings);
 }
 
-export async function findPlaylistForDir(dir: string): Promise<{ playlist: any | null }> {
+export async function findPlaylistForDir(dir: string): Promise<{ playlist: PlaylistRow | null }> {
   const res = await api.get('/find-playlist-for-dir', { params: { dir } });
   return res.data;
 }

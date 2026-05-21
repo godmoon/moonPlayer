@@ -8,6 +8,7 @@ import { PLAY_MODES, TRACK_SORT_OPTIONS, MATCH_FIELDS, MATCH_OP_LABELS, formatDu
 import { QUALITY_MODES } from '../../stores/playerStore';
 import { formatTrackTitle } from '../../utils/format';
 import { setPendingSeekPosition } from '../AudioPlayer/PlayerBar';
+import { toTracks } from '../FileBrowser/utils';
 import { pinyin } from 'pinyin-pro';
 
 export function PlaylistDetail({ playlistId, onClose }: {
@@ -39,7 +40,9 @@ export function PlaylistDetail({ playlistId, onClose }: {
   // 从 store 获取实时更新的播放位置（当前播放列表时使用）
   const { lastPlayedPositions } = usePlayerStore();
   const [trackSort, setTrackSort] = useState<string>('name');
-  const { currentPlaylist, currentTrack, setCurrentPlaylist, setCurrentTrack, setIsPlaying } = usePlayerStore();
+  const { currentPlaylist, currentTrack, playlistTracks: storeTracks, setCurrentPlaylist, setCurrentTrack, setIsPlaying } = usePlayerStore();
+  // 当前播放列表时使用 store 中的 tracks（实时反映删除等操作），否则使用本地的 tracks
+  const displayTracks = currentPlaylist?.id === playlistId ? storeTracks : tracks;
   const prevSortedTracksRef = useRef<Track[]>([]);
   const lastPlayedRef = useRef<HTMLDivElement>(null);
 
@@ -65,7 +68,8 @@ const prevHighlightRef = useRef<number | null | undefined>(null);
       // 只加载已有数据，不重新扫描
       const tracksResult = await getPlaylistTracks(playlistId);
       if (signal?.aborted) return;
-      setTracks(tracksResult.tracks || []);
+      const loadedTracks = toTracks(tracksResult.tracks || []);
+      setTracks(loadedTracks);
 
       let lastTrackId: number | null = null;
       let lastPosition = 0;
@@ -85,7 +89,7 @@ const prevHighlightRef = useRef<number | null | undefined>(null);
       }
 
       // 自动播放逻辑：如果不是当前播放列表，则自动开始播放
-      if (autoPlay && tracksResult.tracks && tracksResult.tracks.length > 0) {
+      if (autoPlay && loadedTracks.length > 0) {
         if (signal?.aborted) return;
         const isCurrentPlaylist = currentPlaylist?.id === playlistId;
         
@@ -105,24 +109,24 @@ const prevHighlightRef = useRef<number | null | undefined>(null);
           // 设置新的播放列表
           const pl: Playlist = {
             id: playlistId,
-            name: result.name,
+            name: result.name ?? '',
             createdAt: result.created_at,
             updatedAt: result.updated_at,
             isAuto: result.is_auto === 1,
             playMode: result.play_mode,
             skipIntro: result.skip_intro,
             skipOutro: result.skip_outro,
-            qualityMode: result.quality_mode,
+            qualityMode: result.quality_mode ?? undefined,
             playbackSpeed: result.playback_speed ?? 1.0
           };
-          setCurrentPlaylist(pl, tracksResult.tracks);
+          setCurrentPlaylist(pl, loadedTracks);
 
           // 定位到上次播放的曲目
-          let startTrack = tracksResult.tracks[0];
+          let startTrack = loadedTracks[0];
           let seekPosition = 0;
 
           if (lastTrackId) {
-            const lastTrack = tracksResult.tracks.find((t: Track) => t.id === lastTrackId);
+            const lastTrack = loadedTracks.find((t: Track) => t.id === lastTrackId);
             if (lastTrack) {
               startTrack = lastTrack;
               seekPosition = lastPosition;
@@ -158,14 +162,6 @@ useEffect(() => {
   const highlightTrackId = currentPlaylist?.id === playlistId 
     ? currentTrack?.id 
     : initialLastTrackId;
-// 当 currentTrack 变化时，滚动到视图中心（使用 scrollIntoView 确保跨平台一致性）
-useEffect(() => {
-  if (currentPlaylist?.id === playlistId && currentTrack?.id && lastPlayedRef.current) {
-    // 使用原生 scrollIntoView 确保移动端兼容性更好
-    lastPlayedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-}, [currentPlaylist?.id, currentTrack?.id, playlistId]);
-
   // 打开设置时初始化表单
   useEffect(() => {
     if (showSettings && playlist) {
@@ -180,7 +176,7 @@ useEffect(() => {
 
   // 音轨排序
   const sortedTracks = useMemo(() => {
-    let sorted = [...tracks];
+    let sorted = [...displayTracks];
     switch (trackSort) {
       case 'name':
         sorted.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh-CN'));
@@ -199,12 +195,15 @@ useEffect(() => {
           [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
         }
         break;
+      case 'path':
+        sorted.sort((a, b) => (a.path || '').localeCompare(b.path || ''));
+        break;
       case 'rating':
         sorted.sort((a, b) => (b.rating || 0) - (a.rating || 0));
         break;
     }
     return sorted;
-  }, [tracks, trackSort]);
+  }, [displayTracks, trackSort]);
 
   // 同步展示顺序到播放列表顺序（确保顺序播放与显示顺序一致）
   useEffect(() => {
@@ -352,23 +351,24 @@ useEffect(() => {
         setRefreshing(false);
         return;
       }
-      
-      setTracks(result.tracks || []);
-      if (result.tracks && result.tracks.length > 0) {
+
+      const tracks = toTracks(result.tracks || []);
+      setTracks(tracks);
+      if (result.playlist && tracks.length > 0) {
         const pl: Playlist = {
           id: playlistId,
-          name: result.playlist.name,
+          name: result.playlist.name ?? '',
           createdAt: result.playlist.created_at,
           updatedAt: result.playlist.updated_at,
           isAuto: result.playlist.is_auto === 1,
           playMode: result.playlist.play_mode,
           skipIntro: result.playlist.skip_intro,
           skipOutro: result.playlist.skip_outro,
-          qualityMode: result.playlist.quality_mode,
+          qualityMode: result.playlist.quality_mode ?? undefined,
           playbackSpeed: result.playlist.playback_speed ?? 1.0
         };
-        setCurrentPlaylist(pl, result.tracks);
-        setCurrentTrack(result.tracks[0]);
+        setCurrentPlaylist(pl, tracks);
+        setCurrentTrack(tracks[0]);
         setIsPlaying(true);
       }
     } catch (err: any) {
@@ -380,7 +380,7 @@ useEffect(() => {
   };
 
   const handlePlayTrack = (track: Track) => {
-    if (tracks.length > 0) {
+    if (displayTracks.length > 0) {
       const pl: Playlist = {
         id: playlistId,
         name: playlist.name,
@@ -438,7 +438,7 @@ if (loading && !playlist) {
       <div className="p-3 border-b border-gray-700 flex items-center justify-between">
         <div>
           <h2 className="font-medium">{playlist.name}</h2>
-          <div className="text-xs text-gray-500">{tracks.length} 首歌曲</div>
+          <div className="text-xs text-gray-500">{displayTracks.length} 首歌曲</div>
         </div>
         <div className="flex gap-2">
           <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }} className={`p-2 rounded md:px-3 ${showSearch ? 'bg-purple-600 text-white' : 'bg-gray-600 hover:bg-gray-500'}`} title="搜索">
@@ -677,14 +677,14 @@ if (loading && !playlist) {
 
       {/* 音轨列表 */}
       <div ref={listContainerRef} className="flex-1 overflow-auto p-2">
-        {tracks.length === 0 ? (
+        {displayTracks.length === 0 ? (
           <div className="text-center text-gray-500 py-8">
             暂无音轨<br/>
             <span className="text-sm">添加来源后点击"重新扫描"</span>
           </div>
         ) : (
           <div className="space-y-1">
-            {filteredTracks.map((track, index) => {
+            {filteredTracks.map((track) => {
               const isLastPlayed = track.id === highlightTrackId;
               
               // 当前播放列表时，从 store 获取实时位置
@@ -704,7 +704,6 @@ if (loading && !playlist) {
                     isLastPlayed ? 'bg-purple-900/40 border border-purple-500/50' : 'hover:bg-gray-700'
                   }`}
                 >
-                  <span className="text-gray-500 w-6 text-center">{index + 1}</span>
                   <div className="flex-1 min-w-0">
                     <div className="truncate">{formatTrackTitle(track)}</div>
                     <div className="text-xs text-gray-500">{track.artist}</div>

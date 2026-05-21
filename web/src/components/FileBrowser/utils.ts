@@ -17,20 +17,30 @@ export interface BrowseResult {
   isRootsView?: boolean;
 }
 
-// 转换 WebDAV 音轨数据
+/** @deprecated 使用 toTrack/toTracks 代替 */
 export function convertWebdavTracks(tracks: any[]): Track[] {
-  return tracks.map((t: any) => ({
+  return tracks.map(toTrack);
+}
+
+// 通用音轨数据转换（服务端 snake_case → store camelCase）
+function toTrack(t: Record<string, any>): Track {
+  return {
     id: t.id,
     path: t.path,
     title: t.title,
-    artist: t.artist || '',
-    album: t.album || '',
-    duration: t.duration || 0,
+    artist: t.artist || undefined,
+    album: t.album || undefined,
+    duration: t.duration || undefined,
     rating: t.rating || 0,
-    playCount: t.play_count || 0,
-    skipCount: t.skip_count || 0,
-    dateAdded: t.date_added || Date.now()
-  }));
+    playCount: t.playCount ?? t.play_count ?? 0,
+    skipCount: t.skipCount ?? t.skip_count ?? 0,
+    lastPlayed: t.lastPlayed ?? t.last_played ?? undefined,
+    dateAdded: t.dateAdded ?? t.date_added ?? Date.now(),
+  };
+}
+
+export function toTracks(tracks: Record<string, any>[]): Track[] {
+  return tracks.map(toTrack);
 }
 
 // 创建播放列表对象

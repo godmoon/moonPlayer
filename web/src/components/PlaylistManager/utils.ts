@@ -10,6 +10,7 @@ export const PLAYLIST_SORT_OPTIONS = [
 export const TRACK_SORT_OPTIONS = [
   { value: 'name', label: '名称' },
   { value: 'number', label: '序号' },
+  { value: 'path', label: '路径' },
   { value: 'random', label: '随机' },
   { value: 'rating', label: '评分' },
 ];

@@ -17,32 +17,51 @@ export const SLEEP_TIMER_OPTIONS = [15, 30, 45, 60, 90, 120];
 
 // 从共享位置导出
 export { formatTrackTitle } from '../../utils/format';
-let globalPendingSeekPosition: number | null = null;
-let globalIsSeekConsumed = false;
-let globalLockedPosition: number | null = null;
+
+/**
+ * 跨组件共享的 seek 状态
+ *
+ * 设计原因：PlaylistDetail/UnifiedPlaylist 需要告诉 PlayerBar
+ * 在切歌后跳到指定位置。因为 PlayerBar 是唯一的，使用模块级
+ * 单例比 Context/Store 更简单直接。
+ *
+ * 注意：此处必须保证只有一个 PlayerBar 实例。
+ */
+
+interface SeekState {
+  pendingPosition: number | null;
+  consumed: boolean;
+  lockedPosition: number | null;
+}
+
+const seekState: SeekState = {
+  pendingPosition: null,
+  consumed: false,
+  lockedPosition: null,
+};
 
 export function setPendingSeekPosition(position: number) {
-  globalPendingSeekPosition = position;
-  globalLockedPosition = position;
-  globalIsSeekConsumed = false;
+  seekState.pendingPosition = position;
+  seekState.lockedPosition = position;
+  seekState.consumed = false;
 }
 
 export function consumePendingSeekPosition(): number | null {
-  if (globalIsSeekConsumed) {
+  if (seekState.consumed) {
     return null;
   }
 
-  const pos = globalPendingSeekPosition;
-  globalPendingSeekPosition = null;
-  globalIsSeekConsumed = true;
+  const pos = seekState.pendingPosition;
+  seekState.pendingPosition = null;
+  seekState.consumed = true;
 
   return pos;
 }
 
 export function getLockedPosition(): number | null {
-  return globalLockedPosition;
+  return seekState.lockedPosition;
 }
 
 export function clearLockedPosition() {
-  globalLockedPosition = null;
+  seekState.lockedPosition = null;
 }

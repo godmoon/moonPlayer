@@ -19,7 +19,3 @@ export function ensureAppDir(): void {
   }
 }
 
-// 规范化路径
-export function normalizePath(p: string): string {
-  return path.resolve(p);
-}

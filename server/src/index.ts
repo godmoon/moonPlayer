@@ -16,37 +16,10 @@ import { webdavRoutes } from './routes/webdav.js';
 import { authRoutes, PUBLIC_PATHS } from './routes/auth.js';
 import { settingsRoutes } from './routes/settings.js';
 import { initDatabaseAsync, closeAllDatabases, needsAdminSetup, validateSession, cleanExpiredSessions } from './db/schema.js';
+import { getDirname } from './utils/runtime.js';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 
-// 获取当前文件所在目录（入口文件）
-function getDirname(): string {
-  // pkg 打包环境
-  if ((process as any).pkg) {
-    return path.dirname(process.execPath);
-  }
-  // ESM 环境
-  try {
-    // @ts-ignore
-    if (typeof import.meta === 'object' && import.meta.url && typeof import.meta.url === 'string') {
-      // @ts-ignore
-      let pathname = fileURLToPath(import.meta.url);
-      if (process.platform === 'win32' && pathname.startsWith('/')) {
-        pathname = pathname.substring(1);
-      }
-      return path.dirname(pathname);
-    }
-  } catch {}
-  // CJS 兜底（esbuild 打包后 bundle.cjs）
-  // @ts-ignore
-  if (typeof __dirname === 'string') {
-    // @ts-ignore
-    return __dirname;
-  }
-  // 最终兜底：当前工作目录
-  return process.cwd();
-}
-const __dirname = getDirname();
+const __dirname = getDirname(import.meta.url);
 
 async function start() {
   // 确保应用目录存在
@@ -92,8 +65,9 @@ async function start() {
 
   // 鉴权中间件
   app.addHook('onRequest', async (req, reply) => {
-    // 公开路径不需要鉴权
-    if (PUBLIC_PATHS.some(p => req.url.startsWith(p))) {
+    // 公开路径不需要鉴权（精确匹配，不含查询参数）
+    const url = req.url.split('?')[0];
+    if (PUBLIC_PATHS.some(p => url === p)) {
       return;
     }
 
@@ -122,8 +96,8 @@ async function start() {
     const token = req.cookies?.moonplayer_session;
     
     // 调试：打印 cookie 信息
-    if (req.url.startsWith('/api/')) {
-      app.log.info({ cookies: req.cookies, token: token ? token.substring(0, 16) + '...' : null, url: req.url }, 'auth check');
+    if (req.url.startsWith('/api/') && process.env.NODE_ENV !== 'production') {
+      app.log.debug({ cookies: req.cookies, token: token ? token.substring(0, 16) + '...' : null, url: req.url }, 'auth check');
     }
     
     if (!token) {

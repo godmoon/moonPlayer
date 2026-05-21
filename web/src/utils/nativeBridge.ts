@@ -48,6 +48,10 @@ function syncToNative() {
   updateNativeMedia(state, audio);
 }
 
+// storage for cleanup
+let _syncInterval: ReturnType<typeof setInterval> | null = null;
+let _unsubscribe: (() => void) | null = null;
+
 // 设置原生桥接
 export function setupNativeBridge() {
   // 暴露桥接接口给原生 App 调用
@@ -170,6 +174,20 @@ export function setupNativeBridge() {
   console.log('[NativeBridge] Bridge setup complete, isNative:', isNativeApp());
 }
 
+// 清理原生桥接
+export function teardownNativeBridge() {
+  if (_syncInterval) {
+    clearInterval(_syncInterval);
+    _syncInterval = null;
+  }
+  if (_unsubscribe) {
+    _unsubscribe();
+    _unsubscribe = null;
+  }
+  (window as any).MoonPlayerBridge = undefined;
+  getAudioElementFn = null;
+}
+
 // 同步播放状态到原生 App
 function setupStateSync() {
   let lastTrackId: number | null = null;
@@ -178,7 +196,7 @@ function setupStateSync() {
   let lastDuration: number = 0;
 
   // 定期同步进度（每 2 秒）
-  setInterval(() => {
+  _syncInterval = setInterval(() => {
     const audio = getAudio();
     const state = usePlayerStore.getState();
     const currentTrackId = state.currentTrack?.id || null;
@@ -194,10 +212,16 @@ function setupStateSync() {
       lastDuration = duration;
       updateNativeMedia(state, audio);
     }
+
+    // 播放状态自愈：Store 认为正在播放但音频实际已暂停时自动恢复
+    if (isPlaying && audio && audio.paused && audio.src && !audio.ended) {
+      console.log('[NativeBridge] 自愈：恢复播放');
+      audio.play().catch(() => {});
+    }
   }, 2000);
 
   // 监听 store 变化（立即响应曲目切换和播放状态变化）
-  usePlayerStore.subscribe((state, prevState) => {
+  _unsubscribe = usePlayerStore.subscribe((state, prevState) => {
     // 曲目变化
     if (state.currentTrack?.id !== prevState.currentTrack?.id) {
       setTimeout(() => {

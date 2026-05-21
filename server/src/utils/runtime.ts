@@ -7,45 +7,54 @@ import { fileURLToPath } from 'url';
 
 let _dirname: string | null = null;
 
-/**
- * 获取当前文件所在目录
- * 兼容 pkg 打包、ESM、CJS 环境
- */
-export function getDirname(): string {
-  if (_dirname) return _dirname;
-  
+function resolveDirname(importMetaUrl?: string): string {
   // pkg 打包环境
   if ((process as any).pkg) {
-    _dirname = path.dirname(process.execPath);
-    return _dirname;
+    return path.dirname(process.execPath);
   }
-  
+
   // ESM 环境
-  // 使用 dynamic import 检测
+  if (importMetaUrl) {
+    let filename = fileURLToPath(importMetaUrl);
+    if (process.platform === 'win32' && filename.startsWith('/')) {
+      filename = filename.substring(1);
+    }
+    return path.dirname(filename);
+  }
   try {
     // @ts-ignore
     if (typeof import.meta === 'object' && import.meta.url && typeof import.meta.url === 'string') {
       // @ts-ignore
       let filename = fileURLToPath(import.meta.url);
-      // Windows 路径处理
       if (process.platform === 'win32' && filename.startsWith('/')) {
         filename = filename.substring(1);
       }
-      _dirname = path.dirname(filename);
-      return _dirname;
+      return path.dirname(filename);
     }
   } catch {}
-  
+
   // CJS 环境（esbuild 打包后）- __dirname 应该存在
   // @ts-ignore
   if (typeof __dirname === 'string') {
     // @ts-ignore
-    _dirname = __dirname;
-    return _dirname;
+    return __dirname;
   }
-  
+
   // 兜底：当前工作目录
-  _dirname = process.cwd();
+  return process.cwd();
+}
+
+/**
+ * 获取当前文件所在目录
+ * 兼容 pkg 打包、ESM、CJS 环境
+ * @param importMetaUrl 传入调用方的 import.meta.url 以获得调用文件所在目录
+ */
+export function getDirname(importMetaUrl?: string): string {
+  if (importMetaUrl) {
+    return resolveDirname(importMetaUrl);
+  }
+  if (_dirname) return _dirname;
+  _dirname = resolveDirname();
   return _dirname;
 }
 

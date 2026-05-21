@@ -339,7 +339,7 @@ export async function streamRoutes(app: FastifyInstance) {
     }
 
     // 安全检查：确保路径在音乐目录内
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_path') as { value: string } | undefined;
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
     const rootPath = row?.value || '/mnt/music/';
 
     const resolvedPath = path.resolve(filePath);

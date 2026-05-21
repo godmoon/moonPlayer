@@ -3,7 +3,7 @@ import { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react
 import AudioPlayer from 'react-h5-audio-player';
 import 'react-h5-audio-player/lib/styles.css';
 import { usePlayerStore, type QualityMode } from '../../stores/playerStore';
-import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory, getTrack } from '../../stores/api';
+import { getStreamUrl, recordPlay, deleteTrack, updatePlaylist, recordHistory, getTrack, removeTrackFromPlaylists } from '../../stores/api';
 import { getDuration, getStreamBitrate } from '../../stores/api';
 import { AddToPlaylistModal } from '../AddToPlaylistModal';
 import { SleepTimerModal } from './SleepTimerModal';
@@ -723,6 +723,7 @@ useEffect(() => {
         setTimeout(() => setDeleteError(null), 3000);
         return;
       }
+      await removeTrackFromPlaylists(currentTrack.id);
       deleteAndPlayNext();
     } catch (e) {
       setDeleteError('删除失败');

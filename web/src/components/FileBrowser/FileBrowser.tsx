@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { browseDirectory, scanTracks, createPlaylist, refreshPlaylist, findPlaylistForDir, getWebdavConfigs, browseWebdav, scanWebdavDirectory, type WebdavConfig } from '../../stores/api';
 import { usePlayerStore } from '../../stores/playerStore';
 import type { Track } from '../../stores/playerStore';
-import { type FileNode, type BrowseResult, convertWebdavTracks, createPlaylistObject } from './utils';
+import { type FileNode, type BrowseResult, convertWebdavTracks, createPlaylistObject, toTracks } from './utils';
 import { getFileName } from '../../utils/format';
 
 export function FileBrowser({ onPlay, onRecycleBin }: {
@@ -84,7 +84,7 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
         playlist = existing.playlist;
         // 先刷新获取现有音轨列表
         const refreshed = await refreshPlaylist(playlist.id, true);
-        let trackList = (refreshed.tracks || []) as Track[];
+        let trackList = toTracks(refreshed.tracks || []);
 
         const existingTrack = trackList.find((t: Track) => t.id === trackId);
         if (!existingTrack) {
@@ -119,9 +119,9 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
         ], true);
 
         const refreshed = await refreshPlaylist(playlist.id, true);
-        const trackList = refreshed.tracks as Track[];
+        const trackList = toTracks(refreshed.tracks || []);
 
-        if (trackList && trackList.length > 0) {
+        if (trackList.length > 0) {
           setCurrentPlaylist(createPlaylistObject(playlist), trackList);
           const targetTrack = trackList.find((t: Track) => t.id === trackId) || trackList[0];
           setCurrentTrack(targetTrack);
@@ -169,9 +169,9 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
       
       if (existing.playlist) {
         const refreshed = await refreshPlaylist(existing.playlist.id, true);
-        const trackList = refreshed.tracks as Track[];
+        const trackList = toTracks(refreshed.tracks || []);
         
-        if (trackList && trackList.length > 0) {
+        if (trackList.length > 0) {
           setCurrentPlaylist(createPlaylistObject(existing.playlist), trackList);
           setCurrentTrack(trackList[0]);
           setIsPlaying(true);
@@ -185,9 +185,9 @@ export function FileBrowser({ onPlay, onRecycleBin }: {
       ], true);
 
       const refreshed = await refreshPlaylist(playlist.id, true);
-      const trackList = refreshed.tracks as Track[];
+      const trackList = toTracks(refreshed.tracks || []);
 
-      if (trackList && trackList.length > 0) {
+      if (trackList.length > 0) {
         setCurrentPlaylist(createPlaylistObject(playlist), trackList);
         setCurrentTrack(trackList[0]);
         setIsPlaying(true);

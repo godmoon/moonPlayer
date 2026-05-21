@@ -1,5 +1,5 @@
 // 添加到播放列表弹窗组件
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { getPlaylists, createPlaylist, addPlaylistItem, refreshPlaylist } from '../../stores/api';
 import { getParentDirName } from '../../utils/format';
 
@@ -16,7 +16,7 @@ export function AddToPlaylistModal({ targetType, targetPath, currentPath, onClos
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  useState(() => {
+  useEffect(() => {
     const load = async () => {
       try {
         const list = await getPlaylists();
@@ -32,7 +32,7 @@ export function AddToPlaylistModal({ targetType, targetPath, currentPath, onClos
       }
     };
     load();
-  });
+  }, [targetType, targetPath, currentPath]);
 
   const handleAddToPlaylist = async (playlistId: number) => {
     try {

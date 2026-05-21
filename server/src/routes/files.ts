@@ -148,6 +148,7 @@ export async function filesRoutes(app: FastifyInstance) {
 
   // 扫描目录获取所有音轨
   app.get('/api/scan', async (req, reply) => {
+    const db = getUserDatabase((req as any).userId);
     const { dir, recursive = 'true' } = req.query as { dir?: string; recursive?: string };
 
     if (!dir) {
@@ -155,6 +156,17 @@ export async function filesRoutes(app: FastifyInstance) {
     }
 
     const resolvedPath = path.resolve(dir);
+
+    // 安全检查：确保在某个音乐目录内
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('music_paths') as { value: string } | undefined;
+    const rootPaths = row?.value ? row.value.split('|').filter(Boolean) : ['/mnt/music/'];
+    const isInAllowedPath = rootPaths.some((rp: string) => {
+      const resolvedRoot = path.resolve(rp);
+      return resolvedPath.startsWith(resolvedRoot) || resolvedPath === resolvedRoot;
+    });
+    if (!isInAllowedPath) {
+      return reply.code(403).send({ error: '无权访问此目录' });
+    }
     const isRecursive = recursive === 'true';
     const audioExtensions = /\.(mp3|flac|wav|ogg|m4a|aac|wma|ape)$/i;
 

@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { searchTracks, scanTracks, createPlaylist, refreshPlaylist, findPlaylistForDir, getTags, getAllTracks, filterTracksByConditions } from '../stores/api';
 import { usePlayerStore } from '../stores/playerStore';
 import type { Track } from '../stores/playerStore';
-import { createPlaylistObject } from './FileBrowser/utils';
+import { createPlaylistObject, toTracks } from './FileBrowser/utils';
 import { MATCH_FIELDS, MATCH_OP_LABELS } from './PlaylistManager/utils';
 import { getFileName, getParentDirName } from '../utils/format';
 
@@ -162,15 +162,7 @@ export function SearchView() {
     return () => clearTimeout(timer);
   }, [query, matchConditions, loadData]);
 
-  // 初始化加载（空搜索显示全部100条）
-  useEffect(() => {
-    setLoading(true);
-    setSearched(true);
-    getAllTracks()
-      .then(setResults)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, []);
+
 
   // 播放搜索结果中的文件（与浏览页面逻辑一致）
   const handlePlayFile = async (track: any) => {
@@ -193,13 +185,13 @@ export function SearchView() {
       if (existing.playlist) {
         playlist = existing.playlist;
         const refreshed = await refreshPlaylist(playlist.id, true);
-        let trackList = refreshed.tracks as Track[];
+        let trackList = toTracks(refreshed.tracks || []);
 
         const existingTrack = trackList.find((t: Track) => t.id === trackId);
         if (!existingTrack) {
           await (await import('../stores/api')).addPlaylistItem(playlist.id, 'file', filePath, false);
           const refreshed2 = await refreshPlaylist(playlist.id);
-          trackList = refreshed2.tracks as Track[];
+          trackList = toTracks(refreshed2.tracks || []);
         }
 
         if (trackList.length > 0) {
@@ -216,7 +208,7 @@ export function SearchView() {
         ], true);
 
         const refreshed = await refreshPlaylist(playlist.id, true);
-        const trackList = refreshed.tracks as Track[];
+        const trackList = toTracks(refreshed.tracks || []);
 
         if (trackList.length > 0) {
           setCurrentPlaylist(createPlaylistObject(playlist), trackList);
